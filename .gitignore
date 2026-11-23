@@ -1,0 +1,17 @@
+# build output and release archives (releases are published on GitHub, not committed)
+build/
+release/
+dist/
+*.zip
+
+# editor / OS / logs
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# never commit secrets
+.env
+.env.*
+*.pem
+*.key
