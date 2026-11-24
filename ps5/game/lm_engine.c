@@ -50,6 +50,7 @@ rgb_hex(uint32_t hex)
 static void
 rumble(struct lm_game *g, double strength, double secs)
 {
+    secs = lm_max(secs, 0.1); /* anything shorter barely spins the motors up */
     if (strength > g->rumble_strength)
         g->rumble_strength = strength;
     if (secs > g->rumble_time)
@@ -109,7 +110,7 @@ spawn_float(struct lm_game *g, double x, double y, char const *text, uint32_t co
 static void
 clear_inputs(struct lm_game *g)
 {
-    g->in_left = g->in_right = g->in_jump = false;
+    g->in_left = g->in_right = g->in_up = g->in_down = g->in_jump = false;
     g->prev_jump = false;
 }
 
@@ -135,6 +136,7 @@ create_player(struct lm_game *g)
     p->invuln = 0.9;
     p->squash_x = 1;
     p->squash_y = 1;
+    p->rider = -1;
     for (int i = 0; i < 4; i++) {
         p->scarf[i].x = px + 10;
         p->scarf[i].y = py + 11;
@@ -145,7 +147,13 @@ static void
 load_cavern(struct lm_game *g, int depth)
 {
     lm_generate_cavern(g->seed, depth, &g->cavern);
+    if (g->chest_taken == depth)
+        for (int i = 0; i < g->cavern.n_collect; i++)
+            if (g->cavern.collect[i].kind == COL_CHEST)
+                g->cavern.collect[i].collected = true;
     create_player(g);
+    g->safe_x = g->player.x;
+    g->safe_y = g->player.y;
     if (g->powers[PU_LANTERN_SHIELD] > 0) {
         g->player.has_shield = true; /* the Lantern Shield renews for a few caverns, then runs out */
         g->powers[PU_LANTERN_SHIELD] -= 1;
@@ -170,6 +178,8 @@ load_cavern(struct lm_game *g, int depth)
     }
     g->n_proj = 0;
     memset(g->crumble, 0, sizeof(g->crumble));
+    g->n_movers = g->cavern.n_movers;
+    memcpy(g->movers, g->cavern.movers, sizeof(g->movers));
     g->n_particles = 0;
     g->n_floats = 0;
     g->keys_collected = 0;
@@ -221,6 +231,8 @@ lm_set_records(struct lm_game *g, int high_score, int best_depth)
     g->best_depth = best_depth;
 }
 
+static void set_banner(struct lm_game *g, char const *title, char const *sub, double secs);
+
 void
 lm_start_run(struct lm_game *g, char const *seed)
 {
@@ -241,12 +253,14 @@ lm_start_run(struct lm_game *g, char const *seed)
     memset(g->powers, 0, sizeof(g->powers));
     memset(g->power_time, 0, sizeof(g->power_time));
     g->next_shield = false;
+    g->chest_taken = 0;
     g->paused = false;
     g->pending_advance = 0;
     g->banner.active = false;
     g->events = 0;
     clear_inputs(g);
     load_cavern(g, 1);
+    set_banner(g, g->cavern.name, g->cavern.hint, 1.8);
     g->running = true;
     lm_audio_set_music_mode(MUSIC_CAVERN, 1.0);
 }
@@ -260,7 +274,7 @@ lm_set_paused(struct lm_game *g, bool paused)
 }
 
 void
-lm_set_input(struct lm_game *g, bool left, bool right, bool jump)
+lm_set_input(struct lm_game *g, bool left, bool right, bool up, bool down, bool jump)
 {
     if (g->paused || !g->running) {
         clear_inputs(g);
@@ -268,6 +282,8 @@ lm_set_input(struct lm_game *g, bool left, bool right, bool jump)
     }
     g->in_left = left;
     g->in_right = right;
+    g->in_up = up;
+    g->in_down = down;
     if (jump && !g->in_jump)
         g->player.jump_buffer = JUMP_BUFFER_TIME;
     g->in_jump = jump;
@@ -483,7 +499,7 @@ lm_leave_shop(struct lm_game *g)
     clear_inputs(g);
     load_cavern(g, g->depth);
     snprintf(t, sizeof(t), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
-    snprintf(s, sizeof(s), "%s \xc2\xb7 Gather %d Keys", lm_biomes[g->cavern.biome].label, g->cavern.keys_total);
+    snprintf(s, sizeof(s), "%s \xc2\xb7 Gather %d Keys", g->cavern.hint, g->cavern.keys_total);
     set_banner(g, t, s, 1.4);
     lm_audio_set_music_mode(MUSIC_CAVERN, 1 + lm_min(0.24, (g->depth - 1) * 0.02));
 }
@@ -548,7 +564,7 @@ resolve_vertical(struct lm_game *g, struct lm_player *p, double prev_bottom)
         int foot_row = (int)lm_floor((p->y + p->height) / TILE_SIZE);
         for (int c = left_col; c <= right_col; c++) {
             enum lm_tile tile = get_tile(g, c, foot_row);
-            if (tile == T_EMPTY || tile == T_BRAMBLE)
+            if (tile == T_EMPTY || tile == T_BRAMBLE || tile == T_PIT)
                 continue;
             if (tile == T_CRUMBLE && c >= 0 && c < GRID_COLS && foot_row >= 0 && foot_row < GRID_ROWS &&
                 g->crumble[foot_row][c].state == CR_BROKEN)
@@ -578,6 +594,8 @@ damage_player(struct lm_game *g, double source_x, double source_y)
     double px = p->x + p->width / 2, py = p->y + p->height / 2;
     int knock = px < source_x ? -1 : 1;
     (void)source_y;
+
+    p->climbing = false; /* a hit knocks you off a ladder */
 
     if (p->has_shield) {
         p->has_shield = false;
@@ -611,10 +629,57 @@ damage_player(struct lm_game *g, double source_x, double source_y)
     return false;
 }
 
+/* Remember firm, safe footing: ground that will not move, crumble or carry the miner into trouble. */
+static void
+note_safe_ground(struct lm_game *g, struct lm_player const *p)
+{
+    if (!p->grounded || p->rider >= 0 || p->climbing)
+        return;
+    int row = (int)lm_floor((p->y + p->height + 1) / TILE_SIZE);
+    int left = (int)lm_floor((p->x + 1) / TILE_SIZE), right = (int)lm_floor((p->x + p->width - 1) / TILE_SIZE);
+    for (int c = left; c <= right; c++) {
+        enum lm_tile t = get_tile(g, c, row);
+        if (t != T_SOLID && t != T_ONE_WAY)
+            return;
+    }
+    for (int c = left - 1; c <= right + 1; c++)
+        if (get_tile(g, c, row - 1) == T_BRAMBLE)
+            return;
+    g->safe_x = p->x;
+    g->safe_y = p->y;
+}
+
+/* A pit costs a heart (or the ward) and sets the miner back on the last firm ground. */
+static bool
+check_pit(struct lm_game *g, struct lm_player *p)
+{
+    int row = (int)lm_floor((p->y + p->height - 4) / TILE_SIZE);
+    double cx = p->x + p->width * 0.5;
+    if (get_tile(g, (int)lm_floor(cx / TILE_SIZE), row) != T_PIT)
+        return false;
+    spawn_burst(g, cx, p->y + p->height, 18, lm_biomes[g->cavern.biome].accent_spec, 170);
+    if (p->invuln <= 0)
+        damage_player(g, cx, p->y + p->height);
+    if (g->respawn_timer > 0 || (g->events & EV_GAME_OVER))
+        return true;
+    p->x = g->safe_x;
+    p->y = g->safe_y;
+    p->vx = p->vy = 0;
+    p->grounded = true;
+    p->climbing = false;
+    p->rider = -1;
+    p->invuln = lm_max(p->invuln, INVULN_DURATION);
+    for (int i = 0; i < 4; i++) {
+        p->scarf[i].x = p->x + 10;
+        p->scarf[i].y = p->y + 11;
+    }
+    return true;
+}
+
 static void
 check_hazards(struct lm_game *g, struct lm_player *p)
 {
-    if (p->invuln > 0)
+    if (check_pit(g, p) || p->invuln > 0)
         return;
     int left_col = (int)lm_floor((p->x + 4) / TILE_SIZE);
     int right_col = (int)lm_floor((p->x + p->width - 4) / TILE_SIZE);
@@ -634,6 +699,132 @@ power_slow(struct lm_game const *g, double timed)
 {
     (void)timed;
     return g->powers[PU_CLOCKWORK_SLOW] > 0 ? 0.75 : 1.0;
+}
+
+static void
+update_scarf(struct lm_game const *g, struct lm_player *p, double dt)
+{
+    p->scarf[0].x = p->x + p->width * 0.5 - p->facing * 4;
+    p->scarf[0].y = p->y + 11;
+    for (int i = 1; i < 4; i++) {
+        double tx = p->scarf[i - 1].x - p->facing * 4.2;
+        double ty = p->scarf[i - 1].y + 0.8 + lm_sin(g->elapsed * 9 + i) * 1.1;
+        p->scarf[i].x += (tx - p->scarf[i].x) * lm_min(1, dt * 18);
+        p->scarf[i].y += (ty - p->scarf[i].y) * lm_min(1, dt * 18);
+    }
+}
+
+/* ------------------------------------------------- ladders and platforms */
+
+static bool
+ladder_at(struct lm_game const *g, int col, double y)
+{
+    int row = (int)lm_floor(y / TILE_SIZE);
+    return col >= 0 && col < GRID_COLS && row >= 0 && row < GRID_ROWS && g->cavern.ladders[row][col];
+}
+
+static void
+update_movers(struct lm_game *g, double dt)
+{
+    double step_dt = dt * power_slow(g, 0.5) * (g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1);
+    for (int i = 0; i < g->n_movers; i++) {
+        struct lm_mover *m = &g->movers[i];
+        double *pos = m->vertical ? &m->y : &m->x;
+        double lo = m->vertical ? m->min_y : m->min_x, hi = m->vertical ? m->max_y : m->max_x;
+        double old = *pos;
+        *pos += m->direction * m->speed * step_dt;
+        if (*pos <= lo) {
+            *pos = lo;
+            m->direction = 1;
+        } else if (*pos >= hi) {
+            *pos = hi;
+            m->direction = -1;
+        }
+        m->dx = m->vertical ? 0 : *pos - old;
+        m->dy = m->vertical ? *pos - old : 0;
+    }
+}
+
+/* Moving platforms are one-way: they only catch feet that were above them. */
+static void
+land_on_movers(struct lm_game *g, struct lm_player *p, double prev_bottom)
+{
+    if (p->vy < 0)
+        return;
+    for (int i = 0; i < g->n_movers; i++) {
+        struct lm_mover const *m = &g->movers[i];
+        if (p->x + p->width - 2 <= m->x || p->x + 2 >= m->x + m->width)
+            continue;
+        if (prev_bottom <= m->y - m->dy + 7 && p->y + p->height >= m->y) {
+            p->y = m->y - p->height;
+            p->vy = 0;
+            p->grounded = true;
+            p->on_conveyor = 0;
+            p->rider = i;
+            return;
+        }
+    }
+}
+
+/* Grabs, climbs and leaves ladders. Returns true while the ladder is in charge of the miner this step. */
+static bool
+update_climb(struct lm_game *g, struct lm_player *p, double dt)
+{
+    double pcx = p->x + p->width * 0.5;
+    int col = (int)lm_floor(pcx / TILE_SIZE);
+    double centre = col * TILE_SIZE + TILE_SIZE * 0.5;
+    double foot = p->y + p->height;
+    int dir = (g->in_down ? 1 : 0) - (g->in_up ? 1 : 0);
+
+    if (!p->climbing) {
+        if (dir == 0 || p->jump_buffer > 0 || p->vy < -150 || lm_fabs(pcx - centre) > 12)
+            return false;
+        /* up: a ladder beside the body. down: also a ladder under the ledge being stood on */
+        bool beside = ladder_at(g, col, foot - 2);
+        bool under = dir > 0 && p->grounded && ladder_at(g, col, foot + 2);
+        if (!under && !(beside && (dir < 0 || !p->grounded)))
+            return false;
+        p->climbing = true;
+    }
+
+    if (p->jump_buffer > 0) { /* hop off */
+        p->climbing = false;
+        p->vy = JUMP_VELOCITY * 0.85;
+        p->jump_buffer = 0;
+        lm_audio_jump(false);
+        return false;
+    }
+    if ((dir == 0 && (g->in_left || g->in_right)) || (!ladder_at(g, col, foot - 2) && !ladder_at(g, col, foot + 2))) {
+        p->climbing = false;
+        return false;
+    }
+
+    p->x += (centre - p->width * 0.5 - p->x) * lm_min(1, dt * 18);
+    p->vx = 0;
+    p->vy = dir * CLIMB_SPEED;
+    p->grounded = false;
+    p->rider = -1;
+    p->on_conveyor = 0;
+    p->coyote = 0;
+    p->has_used_double_jump = false;
+
+    double next = foot + p->vy * dt;
+    if (dir < 0 && !ladder_at(g, col, next - 0.01)) {
+        /* over the top: step onto the ledge the ladder hangs from */
+        next = lm_floor((next - 0.01) / TILE_SIZE + 1) * TILE_SIZE;
+        p->climbing = false;
+    } else if (dir > 0 && !ladder_at(g, col, next)) {
+        next = lm_floor(next / TILE_SIZE) * TILE_SIZE; /* reached the floor below */
+        p->climbing = false;
+    }
+    if (!p->climbing) {
+        p->vy = 0;
+        p->grounded = true;
+    }
+    p->y = next - p->height;
+    if (dir != 0)
+        p->walk_phase += dt * 0.7;
+    return true;
 }
 
 static void
@@ -668,11 +859,26 @@ update_player(struct lm_game *g, double dt)
     p->squash_x += (1 - p->squash_x) * lm_min(1, dt * 14);
     p->squash_y += (1 - p->squash_y) * lm_min(1, dt * 14);
 
+    /* ride the platform underfoot */
+    if (p->rider >= 0 && p->rider < g->n_movers) {
+        struct lm_mover const *m = &g->movers[p->rider];
+        p->x += m->dx;
+        p->y = m->y - p->height;
+        resolve_horizontal(g, p, m->dx);
+    }
+
     int move_dir = 0;
     if (g->in_left) move_dir -= 1;
     if (g->in_right) move_dir += 1;
     if (move_dir != 0)
         p->facing = move_dir > 0 ? 1 : -1;
+
+    if (update_climb(g, p, dt)) {
+        g->prev_jump = g->in_jump;
+        update_scarf(g, p, dt);
+        check_hazards(g, p);
+        return;
+    }
 
     double max_speed = MOVE_SPEED * (1 + cleats * 0.12);
     double target_vx = move_dir * max_speed;
@@ -737,7 +943,9 @@ update_player(struct lm_game *g, double dt)
     p->y += p->vy * dt;
     p->grounded = false;
     p->on_conveyor = 0;
+    p->rider = -1;
     resolve_vertical(g, p, prev_bottom);
+    land_on_movers(g, p, prev_bottom);
 
     if (!was_grounded && p->grounded && impact_vy > 130) {
         double intensity = lm_min(1, impact_vy / MAX_FALL_SPEED);
@@ -750,17 +958,8 @@ update_player(struct lm_game *g, double dt)
     if (p->grounded && lm_fabs(p->vx) > 15)
         p->walk_phase += dt * (lm_fabs(p->vx) / MOVE_SPEED);
 
-    double neck_x = p->x + p->width * 0.5 - p->facing * 4;
-    double neck_y = p->y + 11;
-    p->scarf[0].x = neck_x;
-    p->scarf[0].y = neck_y;
-    for (int i = 1; i < 4; i++) {
-        double tx = p->scarf[i - 1].x - p->facing * 4.2;
-        double ty = p->scarf[i - 1].y + 0.8 + lm_sin(g->elapsed * 9 + i) * 1.1;
-        p->scarf[i].x += (tx - p->scarf[i].x) * lm_min(1, dt * 18);
-        p->scarf[i].y += (ty - p->scarf[i].y) * lm_min(1, dt * 18);
-    }
-
+    update_scarf(g, p, dt);
+    note_safe_ground(g, p);
     check_hazards(g, p);
 }
 
@@ -1011,41 +1210,45 @@ update_projectiles(struct lm_game *g, double dt)
 }
 
 static void
-activate_powerup(struct lm_game *g, int type, double x, double y)
+open_chest(struct lm_game *g, struct lm_collectable const *item)
 {
-    struct lm_powerup_def const *def = &lm_powerups[type];
     struct lm_player *p = &g->player;
-    double dur_mult = g->perks[PERK_CHRONOMETER] > 0 ? 1.5 : 1;
+    int prize = item->powerup;
     char buf[48];
+    uint32_t color = 0xffe347;
+    g->chest_taken = g->depth;
+    if (prize == CHEST_LIFE && g->lives >= MAX_LIVES)
+        prize = CHEST_JACKPOT;
+    if (prize == PU_TEA_THERMOS && g->powers[PU_TEA_THERMOS] >= 3)
+        prize = CHEST_JACKPOT;
+    if (prize == CHEST_LIFE) {
+        g->lives += 1;
+        color = 0xf43fa5;
+        snprintf(buf, sizeof(buf), "SPARE LANTERN! +1 LIFE");
+    } else if (prize == CHEST_JACKPOT) {
+        int pts = 600 + g->depth * 40;
+        g->relic_points += pts;
+        g->score += pts;
+        snprintf(buf, sizeof(buf), "TREASURE! +%d PTS", pts);
+    } else {
+        color = lm_powerups[prize].color;
+        if (prize == PU_LANTERN_SHIELD) {
+            p->has_shield = true;
+        } else if (prize == PU_TEA_THERMOS) {
+            g->powers[prize] += 1;
+        } else {
+            /* one timer's worth, the same as buying it once */
+            double base = power_base_time(SHOP_SPRING_BOOTS + prize);
+            g->power_time[prize] = lm_min(g->power_time[prize] + base, base * 3);
+            g->powers[prize] = (int)lm_ceil(g->power_time[prize] / base);
+        }
+        snprintf(buf, sizeof(buf), "%s!", lm_powerups[prize].name);
+    }
     lm_audio_powerup();
     g->hitstop = 0.035;
-    spawn_burst(g, x, y, 16, def->color, 145);
-    rumble(g, 0.35, 0.1);
-    switch (type) {
-    case PU_SPRING_BOOTS:
-        p->spring = def->duration * dur_mult;
-        spawn_float(g, x, y - 10, "SPRING BOOTS!", def->color);
-        break;
-    case PU_LANTERN_SHIELD:
-        p->has_shield = true;
-        spawn_float(g, x, y - 10, "LANTERN SHIELD!", def->color);
-        break;
-    case PU_TEA_THERMOS:
-        g->air = lm_min(MAX_AIR, g->air + 38);
-        g->score += 150;
-        spawn_float(g, x, y - 10, "+AIR & TEA!", def->color);
-        break;
-    case PU_STARLIGHT_MAGNET:
-        p->magnet = def->duration * dur_mult;
-        spawn_float(g, x, y - 10, "STARLIGHT MAGNET!", def->color);
-        break;
-    case PU_CLOCKWORK_SLOW:
-    default:
-        p->slow = def->duration * dur_mult;
-        spawn_float(g, x, y - 10, "CLOCKWORK SLOW!", def->color);
-        break;
-    }
-    (void)buf;
+    spawn_burst(g, item->x, item->y, 22, color, 160);
+    spawn_float(g, item->x, item->y - 18, buf, color);
+    rumble(g, 0.5, 0.2);
 }
 
 static void
@@ -1065,7 +1268,7 @@ check_collectables(struct lm_game *g, double dt)
         double dx = pcx - item->x, dy = pcy - item->y;
         double dist = lm_hypot(dx, dy);
 
-        if (magnet_radius > 0 && item->kind != COL_POWERUP && dist < magnet_radius && dist > 1) {
+        if (magnet_radius > 0 && item->kind != COL_CHEST && dist < magnet_radius && dist > 1) {
             double pull = p->magnet > 0 ? 275 : 135;
             item->x += (dx / dist) * pull * dt;
             item->y += (dy / dist) * pull * dt;
@@ -1106,8 +1309,8 @@ check_collectables(struct lm_game *g, double dt)
                 snprintf(buf, sizeof(buf), "+%d PTS", earned);
                 spawn_float(g, item->x, item->y - 10, buf, 0xffe347);
                 rumble(g, 0.12, 0.04);
-            } else if (item->kind == COL_POWERUP) {
-                activate_powerup(g, item->powerup, item->x, item->y);
+            } else if (item->kind == COL_CHEST) {
+                open_chest(g, item);
             }
         }
     }
@@ -1356,6 +1559,11 @@ lm_step(struct lm_game *g, double dt)
         if (g->pending_advance <= 0) {
             g->depth += 1;
             load_cavern(g, g->depth);
+            {
+                char t[128];
+                snprintf(t, sizeof(t), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
+                set_banner(g, t, g->cavern.hint, 1.4);
+            }
             lm_audio_update_tempo(1 + lm_min(0.24, (g->depth - 1) * 0.02));
         }
         return;
@@ -1370,6 +1578,7 @@ lm_step(struct lm_game *g, double dt)
     update_particles(g, dt);
     update_floats(g, dt);
     update_crumbles(g, dt);
+    update_movers(g, dt);
 #define STEP_ENDED() ((g->events & EV_GAME_OVER) || g->respawn_timer > 0)
     update_player(g, dt);
     if (STEP_ENDED())

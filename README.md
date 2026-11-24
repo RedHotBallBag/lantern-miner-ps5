@@ -16,9 +16,11 @@ Grab all the keys, get to the portal and head down to the next cavern. Watch you
 
 - You get 5 lives, with 2 hearts each
 - Every 5th cavern there's a shop for power-ups, extra lives and upgrades
-- Endless caverns that get harder the deeper you go
+- 20 hand-built caverns that get harder as you go, then they loop round tougher
+- Ladders, moving platforms, lifts, conveyors, crumbling ledges and pits
+- Lucky chests with a free power-up inside
 - Top 10 high score table
-- Same seed, same caverns, so you can challenge a mate
+- Same seed, same run, so you can challenge a mate
 
 ![Cavern one](docs/screenshots/04_play_cavern1.png)
 ![The shop](docs/screenshots/09_shop.png)
@@ -29,6 +31,7 @@ Grab all the keys, get to the portal and head down to the next cavern. Watch you
 | --- | --- |
 | Move | D-pad or left stick |
 | Jump | Any face button, shoulder or trigger (hold to jump higher) |
+| Climb ladders | Up / Down |
 | Pause | Options |
 | Mute | R3 |
 | Menus | ✕ select, ○ back |

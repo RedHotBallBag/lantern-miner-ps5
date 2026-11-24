@@ -169,6 +169,17 @@ main(int argc, char **argv)
         frames(2, 0, 0, name);
     }
 
+    /* every built cavern in the order this seed deals them */
+    for (int d = 1; d <= 20; d++) {
+        char name[64];
+        app_debug_start(g.app, "KETTLE-417", d);
+        game()->player.invuln = 3600;
+        game()->banner.active = false;
+        frames(150, 0, 0, NULL);
+        game()->player.invuln = 0;
+        snprintf(name, sizeof(name), "level_%02d.png", d);
+        frames(2, 0, 0, name);
+    }
     /* clear cavern 10 -> Old Barnaby's shop */
     app_debug_start(g.app, "WILLY-222", 10);
     {

@@ -41,7 +41,8 @@ void main()
         c.a *= t * v_extra;
     } else if (mode == 9) {
         // scanlines: aux.x = period in target pixels, extra = strength
-        float s = 0.5 + 0.5 * cos(floor(gl_FragCoord.y) * 6.2831853 / max(v_aux.x, 1.0)); // whole pixel rows: 1,0 at a 2px period
+        float period = max(v_aux.x, 2.0);
+        float s = step(0.5 * period, mod(floor(gl_FragCoord.y), period)); // the lower half of each period is dark
         c.a *= v_extra * s;
     } else if (mode == 8) {
         float t = clamp(length(v_uv) / max(v_aux.x, 1.0), 0.0, 1.0);

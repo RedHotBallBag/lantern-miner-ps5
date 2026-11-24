@@ -41,6 +41,8 @@ int sceAudioOutOpen(int user_id, int type, int index, unsigned len, unsigned fre
 int sceAudioOutOutput(int handle, void const *data);
 struct pad_vibration { uint8_t large, small; };
 int scePadSetVibration(int32_t handle, struct pad_vibration const *param);
+int scePadSetVibrationMode(int32_t handle, int32_t mode);
+#define PAD_VIBRATION_COMPATIBLE 2
 
 #define OUT_W 3840
 #define OUT_H 2160
@@ -98,6 +100,14 @@ static struct {
     double last_try;
 } g_pad = {.handle = -1, .user = -1, .last_try = -10.0};
 
+/* A PS5 title's pad starts in haptics mode, where the two motor values are accepted but nothing is felt. */
+static void
+pad_rumble_mode(void)
+{
+    if (g_pad.handle >= 0)
+        report("pad: rumble mode -> %x", scePadSetVibrationMode(g_pad.handle, PAD_VIBRATION_COMPATIBLE));
+}
+
 static void
 pad_init(void)
 {
@@ -108,6 +118,7 @@ pad_init(void)
     scePadInit();
     g_pad.handle = user >= 0 ? scePadOpen(user, 0, 0, NULL) : -1;
     report("pad: user %d handle %d", user, g_pad.handle);
+    pad_rumble_mode();
 }
 
 static void
@@ -123,6 +134,7 @@ pad_poll(struct app_input *in, double now)
         if (g_pad.user >= 0 && now - g_pad.last_try > 1.0) {
             g_pad.last_try = now;
             g_pad.handle = scePadOpen(g_pad.user, 0, 0, NULL);
+            pad_rumble_mode();
         }
         return;
     }
@@ -451,11 +463,22 @@ main(void)
             app_frame(g_app, &in, t0, vkr);
             {
                 static uint8_t last_large, last_small;
+                static bool was_connected = true;
+                static unsigned logged;
                 uint8_t large = 0, small = 0;
+                if (in.connected && !was_connected) {
+                    pad_rumble_mode(); /* a reconnected controller starts over in haptics mode */
+                    last_large = last_small = 0;
+                }
+                was_connected = in.connected;
                 app_rumble(g_app, &large, &small);
                 if ((large != last_large || small != last_small) && g_pad.handle >= 0) {
                     struct pad_vibration v = {large, small};
-                    scePadSetVibration(g_pad.handle, &v);
+                    int rc = scePadSetVibration(g_pad.handle, &v);
+                    if (logged < 8) {
+                        logged++;
+                        report("pad: rumble %u/%u -> %x", large, small, rc);
+                    }
                     last_large = large;
                     last_small = small;
                 }

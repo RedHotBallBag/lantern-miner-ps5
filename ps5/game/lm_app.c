@@ -84,6 +84,7 @@ struct app {
     double sim_acc; /* fixed-timestep accumulator */
     float toast_t;
     char toast[80];
+    double buzz_t; /* >0: a test rumble from the settings screen */
 };
 
 /* ---------------------------------------------------------------- settings io */
@@ -296,12 +297,14 @@ app_audio_pull(struct app *a, int16_t *lr, size_t frames)
 bool
 app_rumble(struct app const *a, uint8_t *large, uint8_t *small)
 {
-    if (!a->set.rumble || a->g.rumble_time <= 0 || a->g.rumble_strength <= 0) {
+    double s = a->buzz_t > 0 ? 0.8 : a->g.rumble_time > 0 ? a->g.rumble_strength : 0;
+    if (!a->set.rumble || s <= 0) {
         *large = *small = 0;
         return false;
     }
-    *large = (uint8_t)lm_min(255, a->g.rumble_strength * 170);
-    *small = (uint8_t)lm_min(255, a->g.rumble_strength * 255);
+    /* the motors do not turn for tiny values, so the quietest event still starts well above zero */
+    *large = (uint8_t)lm_min(255, 70 + s * 185);
+    *small = (uint8_t)lm_min(255, 90 + s * 165);
     return true;
 }
 
@@ -713,12 +716,14 @@ draw_hud(struct app *a, struct vkr *r)
         double age = a->now - a->run_t0;
         if (age < 9.0 && g->depth == 1) {
             float al = (float)lm_clamp(age < 0.8 ? age / 0.8 : (9.0 - age) / 1.2, 0, 1);
-            float gw = ui_hint_w(r, G_DPAD_LR, "Move", 40) + ui_hint_w(r, G_CROSS, "Jump (hold = higher)", 40) + ui_hint_w(r, G_OPTIONS, "Pause", 40) + 100;
+            float gw = ui_hint_w(r, G_DPAD_LR, "Move", 40) + ui_hint_w(r, G_CROSS, "Jump (hold = higher)", 40) + ui_hint_w(r, G_DPAD_UD, "Climb", 40) +
+                       ui_hint_w(r, G_OPTIONS, "Pause", 40) + 150;
             float x = (VKR_W - gw) / 2, y = 150; /* up by the top bar, clear of Willy */
             vkr_rrect(r, x - 36, y - 38, gw + 72, 76, 20, HEXA(0x0a080d, 0.78 * al));
             if (al > 0.45f) { /* the glyphs have no alpha of their own: they leave as the pill fades */
                 x += ui_hint(r, G_DPAD_LR, x, y, "Move", 40) + 50;
                 x += ui_hint(r, G_CROSS, x, y, "Jump (hold = higher)", 40) + 50;
+                x += ui_hint(r, G_DPAD_UD, x, y, "Climb", 40) + 50;
                 ui_hint(r, G_OPTIONS, x, y, "Pause", 40);
             }
         }
@@ -1073,7 +1078,10 @@ adjust_setting(struct app *a, int row, int dir)
     case SET_MUTE: a->set.muted = !a->set.muted; break;
     case SET_SCAN: a->set.scan = (a->set.scan + 3 + dir) % 3; break;
     case SET_BLOOM: a->set.bloom = !a->set.bloom; break;
-    case SET_RUMBLE: a->set.rumble = !a->set.rumble; break;
+    case SET_RUMBLE:
+        a->set.rumble = !a->set.rumble;
+        a->buzz_t = a->set.rumble ? 0.35 : 0;
+        break;
     case SET_SHAKE: a->set.shake = !a->set.shake; break;
     default: return;
     }
@@ -1301,6 +1309,8 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     vkr_begin_frame(r);
     if (a->toast_t > 0)
         a->toast_t -= (float)dt;
+    if (a->buzz_t > 0)
+        a->buzz_t -= dt;
     for (int i = 0; i < SHOP_COUNT; i++)
         if (a->shop_flash[i] > 0)
             a->shop_flash[i] -= dt * 2.2;
@@ -1326,7 +1336,8 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
             go(a, SC_PAUSE);
             break;
         }
-        lm_set_input(g, (in->held & PAD_LEFT) != 0, (in->held & PAD_RIGHT) != 0, jump);
+        lm_set_input(g, (in->held & PAD_LEFT) != 0, (in->held & PAD_RIGHT) != 0, (in->held & PAD_UP) != 0,
+                     (in->held & PAD_DOWN) != 0, jump);
         break;
     }
     case SC_PAUSE:
@@ -1400,8 +1411,6 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     case SC_PAUSE: {
         struct lm_world_opts o = {0, 0, 2.0f, a->set.bloom};
         lm_draw_world(r, &a->g, &o);
-        if (a->set.scan)
-            vkr_scanlines(r, 0, 0, VKR_W, VKR_H, vkr_scale(r) * 2.0f, HEX(0x000000), a->set.scan == 1 ? 0.12f : 0.26f);
         if (a->screen == SC_PLAY)
             draw_hud(a, r);
         else
@@ -1412,8 +1421,6 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         if (a->prev_screen == SC_PAUSE) {
             struct lm_world_opts o = {0, 0, 2.0f, a->set.bloom};
             lm_draw_world(r, &a->g, &o);
-            if (a->set.scan)
-                vkr_scanlines(r, 0, 0, VKR_W, VKR_H, vkr_scale(r) * 2.0f, HEX(0x000000), a->set.scan == 1 ? 0.12f : 0.26f);
         }
         draw_settings(a, r);
         break;
@@ -1435,6 +1442,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         ui_text_c(r, VKR_DISPLAY, 60, 960, 440, HEX(C_CREAM), "Controller disconnected");
         ui_text_c(r, VKR_SANS, 30, 960, 530, HEX(C_MUTED), "Reconnect a DualSense to continue");
     }
+    /* over every screen, so a change shows straight away in Settings */
+    if (a->set.scan)
+        vkr_scanlines(r, 0, 0, VKR_W, VKR_H, vkr_scale(r) * 3.0f, HEX(0x000000), a->set.scan == 1 ? 0.30f : 0.55f);
     draw_fade_in(a, r);
     draw_splash(a, r);
 }

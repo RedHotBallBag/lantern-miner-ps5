@@ -15,8 +15,8 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.5"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 5
+#define LM_VERSION "0.6"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 7
 #define START_LIVES 5
 #define MAX_LIVES 9
 #define BASE_HEARTS 2 /* hits you can take before losing a life */
@@ -40,9 +40,11 @@
 #define CRUMBLE_SHAKE_TIME 0.72
 #define CRUMBLE_RESPAWN_TIME 4.2
 #define MAX_AIR 100.0
-#define BASE_AIR_DRAIN_PER_SEC 1.48
+#define CLIMB_SPEED 125.0
+#define MOVER_THICKNESS 10
+#define BASE_AIR_DRAIN_PER_SEC 1.15 /* the built caverns involve waiting for platforms */
 
-enum lm_tile { T_EMPTY, T_SOLID, T_ONE_WAY, T_CONVEYOR_LEFT, T_CONVEYOR_RIGHT, T_CRUMBLE, T_BRAMBLE };
+enum lm_tile { T_EMPTY, T_SOLID, T_ONE_WAY, T_CONVEYOR_LEFT, T_CONVEYOR_RIGHT, T_CRUMBLE, T_BRAMBLE, T_PIT };
 
 enum lm_biome_id { BIOME_TIMBER_HEARTH, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_GLOW_MOSS, BIOME_FROST_LANTERN, BIOME_COUNT };
 
@@ -98,7 +100,9 @@ extern int const lm_seed_word_count;
 
 /* ----------------------------------------------------------------- cavern */
 
-enum lm_collect_kind { COL_KEY, COL_RELIC, COL_POWERUP };
+enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST };
+/* what a chest holds: one of enum lm_powerup, or one of these */
+enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_KINDS };
 
 struct lm_collectable {
     int kind;       /* enum lm_collect_kind */
@@ -121,11 +125,21 @@ struct lm_lantern { double x, y, sway_phase, chain_length; };
 #define LM_MAX_COLLECT 32
 #define LM_MAX_ENEMIES 32
 #define LM_MAX_LANTERNS 5
+#define LM_MAX_MOVERS 6
+
+/* A one-way platform that slides between (min_x, min_y) and (max_x, max_y); x / y is its top-left corner. */
+struct lm_mover {
+    double x, y, width, min_x, max_x, min_y, max_y, speed;
+    int direction;
+    bool vertical;
+    double dx, dy; /* movement during the last step, used to carry the miner */
+};
 
 struct lm_cavern {
     int depth;
     int biome;
     char name[96];
+    char hint[48];
     uint8_t tiles[GRID_ROWS][GRID_COLS];
     struct { double x, y; } spawn;
     struct { double x, y; int col, row; } portal;
@@ -136,9 +150,14 @@ struct lm_cavern {
     struct lm_lantern lanterns[LM_MAX_LANTERNS];
     int n_lanterns;
     int keys_total;
+    uint8_t ladders[GRID_ROWS][GRID_COLS]; /* 1 = ladder; laid over the tiles so it can pass through a ledge */
+    struct lm_mover movers[LM_MAX_MOVERS]; /* starting positions; the live copy moves in struct lm_game */
+    int n_movers;
 };
 
 void lm_generate_cavern(char const *seed, int depth, struct lm_cavern *out);
+int lm_level_count(void);
+void lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_cavern *out);
 
 /* ------------------------------------------------------------------ engine */
 
@@ -150,6 +169,8 @@ struct lm_player {
     bool can_air_jump, has_used_double_jump;
     double invuln, squash_x, squash_y, walk_phase;
     int on_conveyor;
+    bool climbing;
+    int rider; /* moving platform being stood on, -1 for none */
     bool has_shield;
     double spring, magnet, slow;
     struct { double x, y; } scarf[4];
@@ -189,7 +210,7 @@ struct lm_run_summary {
 
 struct lm_game {
     /* input */
-    bool in_left, in_right, in_jump, prev_jump;
+    bool in_left, in_right, in_up, in_down, in_jump, prev_jump;
     /* run state */
     char seed[40];
     int depth, score, relic_points, high_score, best_depth, hearts, max_hearts;
@@ -211,6 +232,10 @@ struct lm_game {
     struct lm_projectile proj[LM_MAX_PROJ];
     int n_proj;
     struct lm_crumble crumble[GRID_ROWS][GRID_COLS];
+    struct lm_mover movers[LM_MAX_MOVERS];
+    int n_movers;
+    double safe_x, safe_y; /* last firm footing: a fall into a pit puts the miner back here */
+    int chest_taken;       /* depth whose chest has been opened, so a retry does not refill it */
     struct lm_particle particles[LM_MAX_PARTICLES];
     int n_particles;
     struct lm_float_text floats[LM_MAX_FLOATS];
@@ -239,7 +264,7 @@ void lm_init(struct lm_game *g, uint32_t rng_seed);
 void lm_set_records(struct lm_game *g, int high_score, int best_depth);
 void lm_start_run(struct lm_game *g, char const *seed);
 void lm_set_paused(struct lm_game *g, bool paused);
-void lm_set_input(struct lm_game *g, bool left, bool right, bool jump);
+void lm_set_input(struct lm_game *g, bool left, bool right, bool up, bool down, bool jump);
 void lm_step(struct lm_game *g, double dt);
 void lm_leave_shop(struct lm_game *g);
 /* Shop: status of an item for the current wallet. */

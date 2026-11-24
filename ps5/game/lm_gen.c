@@ -1,11 +1,11 @@
 /*
-** Lantern Miner: seeded cavern generator. A line-by-line port of generator.ts: same FNV-1a string hash, same
-** Mulberry32 stream, same order of every RNG call, so a seed builds the same cavern as the web version.
+** Lantern Miner: cavern builder. Twenty hand-designed maps (lm_levels.inc) are dealt out in order of difficulty; the
+** seed picks the order within each tier, whether a map is mirrored, and where luck puts a chest. The same seed always
+** gives the same run.
 */
 #include "lm.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------------- rng */
@@ -58,268 +58,142 @@ rng_chance(struct rng *r, double p)
     return rng_next(r) < p;
 }
 
-/* Fisher-Yates over an array of `sz`-byte elements, in place. */
-static void
-rng_shuffle(struct rng *r, void *base, int n, size_t sz)
-{
-    unsigned char *a = base;
-    unsigned char tmp[64];
-    for (int i = n - 1; i > 0; i--) {
-        int j = (int)lm_floor(rng_next(r) * (double)(i + 1));
-        memcpy(tmp, a + (size_t)i * sz, sz);
-        memcpy(a + (size_t)i * sz, a + (size_t)j * sz, sz);
-        memcpy(a + (size_t)j * sz, tmp, sz);
-    }
-}
+/* ------------------------------------------------------------------- maps */
 
-/* ------------------------------------------------------------- reachability */
+enum { OP_FILL, OP_LADDER, OP_MOVER, OP_START, OP_EXIT, OP_KEY, OP_GEM, OP_CHEST, OP_FOE };
+struct op { uint8_t kind, arg, c0, r0, c1, r1; };
+struct level { char const *name, *hint; struct op const *ops; int n; };
 
-struct cell { int c, r; };
+#include "lm_levels.inc"
 
-struct plat { int row, start, end, type; };
+#define N_LEVELS ((int)(sizeof(k_levels) / sizeof(k_levels[0])))
+#define PER_TIER 5
 
-static bool
-walkable_support(int t)
-{
-    return t == T_SOLID || t == T_ONE_WAY || t == T_CONVEYOR_LEFT || t == T_CONVEYOR_RIGHT || t == T_CRUMBLE;
-}
+int lm_level_count(void) { return N_LEVELS; }
 
-static bool
-standable(uint8_t tiles[GRID_ROWS][GRID_COLS], int c, int r)
-{
-    if (c < 1 || c >= GRID_COLS - 1 || r < 2 || r >= GRID_ROWS - 1)
-        return false;
-    if (tiles[r][c] != T_EMPTY)
-        return false;
-    if (tiles[r - 1][c] == T_SOLID || tiles[r - 1][c] == T_BRAMBLE)
-        return false;
-    return walkable_support(tiles[r + 1][c]);
-}
-
-/* Breadth-first search in the same visiting order as the web version; `out` receives cells in discovery order. */
+/* Which map is cavern `depth` of this seed. Depths 1..20 walk the tiers in order; after that the fifteen harder maps
+   are reshuffled for each lap. */
 static int
-compute_reachable(uint8_t tiles[GRID_ROWS][GRID_COLS], int sc, int sr, struct cell *out)
+pick_level(char const *seed, int depth)
 {
-    static bool visited[GRID_ROWS][GRID_COLS];
-    int n = 0, head = 0;
-    memset(visited, 0, sizeof(visited));
-    if (!standable(tiles, sc, sr))
+    int deck[N_LEVELS], n = 0, at;
+    char key[160];
+    struct rng r;
+    if (depth <= 1)
         return 0;
-    out[n++] = (struct cell){sc, sr};
-    visited[sr][sc] = true;
-    while (head < n) {
-        struct cell cur = out[head++];
-        for (int dc = -4; dc <= 4; dc++) {
-            for (int dr = -3; dr <= 7; dr++) {
-                if (dc == 0 && dr == 0)
-                    continue;
-                int nc = cur.c + dc, nr = cur.r + dr;
-                if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS)
-                    continue;
-                if (visited[nr][nc])
-                    continue;
-                if (!standable(tiles, nc, nr))
-                    continue;
-                int adc = dc < 0 ? -dc : dc;
-                if (dr < 0) {
-                    int rise = -dr;
-                    if (rise == 3 && adc > 3) continue;
-                    if (rise == 2 && adc > 4) continue;
-                    if (rise == 1 && adc > 4) continue;
-                } else if (dr == 0) {
-                    if (adc > 4) continue;
-                } else {
-                    if (adc > 4) continue;
-                }
-                int step = dc >= 0 ? 1 : -1;
-                bool blocked = false;
-                int check_row = dr < 0 ? nr : cur.r;
-                for (int c = cur.c + step; c != nc + step; c += step) {
-                    if (tiles[check_row][c] == T_SOLID) {
-                        blocked = true;
-                        break;
-                    }
-                }
-                if (blocked)
-                    continue;
-                if (dr < 0) {
-                    for (int r = cur.r - 1; r >= nr; r--) {
-                        if (tiles[r][cur.c] == T_SOLID) {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if (blocked)
-                        continue;
-                }
-                visited[nr][nc] = true;
-                out[n++] = (struct cell){nc, nr};
-            }
-        }
+    if (depth <= N_LEVELS) {
+        int tier = (depth - 1) / PER_TIER;
+        int first = tier == 0 ? 1 : tier * PER_TIER;
+        for (int i = first; i < (tier + 1) * PER_TIER; i++)
+            deck[n++] = i;
+        at = depth - 1 - first;
+        snprintf(key, sizeof(key), "%s::tier::%d", seed, tier);
+    } else {
+        for (int i = PER_TIER; i < N_LEVELS; i++)
+            deck[n++] = i;
+        at = (depth - N_LEVELS - 1) % n;
+        snprintf(key, sizeof(key), "%s::lap::%d", seed, (depth - N_LEVELS - 1) / n);
     }
-    return n;
+    rng_seed(&r, key);
+    for (int i = n - 1; i > 0; i--) {
+        int j = rng_pick(&r, i + 1);
+        int t = deck[i];
+        deck[i] = deck[j];
+        deck[j] = t;
+    }
+    return deck[at];
 }
 
-/* ------------------------------------------------------------------ enemies */
+/* ------------------------------------------------------------------- foes */
+
+static bool
+open_for_foe(struct lm_cavern const *cv, int c, int r)
+{
+    return c > 0 && c < GRID_COLS - 1 && r > 0 && r < GRID_ROWS - 1 && cv->tiles[r][c] == T_EMPTY;
+}
+
+static bool
+footing(struct lm_cavern const *cv, int c, int r)
+{
+    int t = cv->tiles[r + 1][c];
+    return open_for_foe(cv, c, r) &&
+           (t == T_SOLID || t == T_ONE_WAY || t == T_CONVEYOR_LEFT || t == T_CONVEYOR_RIGHT || t == T_CRUMBLE);
+}
 
 static void
-add_enemy(struct lm_cavern *cv, int kind, double x, double y, double min_x, double max_x, double min_y, double max_y,
-          double speed, int direction, double phase)
+add_foe(struct lm_cavern *cv, int kind, int c, int r, struct rng *rng)
 {
     if (cv->n_enemies >= LM_MAX_ENEMIES)
         return;
-    struct lm_enemy_spawn *e = &cv->enemies[cv->n_enemies++];
-    e->kind = kind;
-    e->x = x;
-    e->y = y;
-    e->min_x = min_x;
-    e->max_x = max_x;
-    e->min_y = min_y;
-    e->max_y = max_y;
-    e->speed = speed;
-    e->direction = direction;
-    e->phase = phase;
+    int depth = cv->depth;
+    double scale = lm_min(1.75, 1 + (depth - 1) * 0.04);
+    int dir = rng_chance(rng, 0.5) ? 1 : -1;
+    double phase = rng_next(rng) * LM_PI * 2;
+
+    /* nastier kinds wait their turn: an easier foe takes the post until then */
+    if (kind == EN_SPITTER && depth < 7) kind = EN_BEETLE;
+    if (kind == EN_CHARGER && depth < 5) kind = EN_BEETLE;
+    if (kind == EN_BOUNCER && depth < 3) kind = EN_BEETLE;
+    if (kind == EN_WISP && depth < 4) kind = EN_GLOW_BAT;
+    if (kind == EN_PISTON && depth < 3) kind = EN_GLOW_BAT;
+    if (kind == EN_STALKER && depth < 12) kind = EN_WISP;
+
+    struct lm_enemy_spawn e = {0};
+    e.kind = kind;
+    e.direction = dir;
+    e.phase = phase;
+    e.x = c * TILE_SIZE + 4;
+    e.y = r * TILE_SIZE + 4;
+    e.min_x = e.max_x = e.x;
+    e.min_y = e.max_y = e.y;
+
+    if (kind == EN_BEETLE || kind == EN_CHARGER || kind == EN_BOUNCER || kind == EN_SPITTER) {
+        int lo = c, hi = c;
+        while (lo > c - 6 && footing(cv, lo - 1, r)) lo--;
+        while (hi < c + 6 && footing(cv, hi + 1, r)) hi++;
+        e.min_x = lo * TILE_SIZE + (hi > lo ? 6 : 3);
+        e.max_x = (hi + 1) * TILE_SIZE - (hi > lo ? 28 : 27);
+        e.x = lm_clamp(c * TILE_SIZE + 4, e.min_x, e.max_x);
+        e.y = r * TILE_SIZE + (kind == EN_BEETLE || kind == EN_CHARGER ? 10 : 8);
+        e.min_y = e.y - 50;
+        e.max_y = e.y;
+        e.speed = (kind == EN_CHARGER ? 62 : kind == EN_BEETLE ? 58 : kind == EN_BOUNCER ? 46 : 0) * scale;
+    } else if (kind == EN_GLOW_BAT) {
+        int lo = c, hi = c;
+        while (lo > c - 5 && open_for_foe(cv, lo - 1, r)) lo--;
+        while (hi < c + 5 && open_for_foe(cv, hi + 1, r)) hi++;
+        e.min_x = lo * TILE_SIZE;
+        e.max_x = hi * TILE_SIZE + 6;
+        e.min_y = e.y - 16;
+        e.max_y = e.y + 16;
+        e.speed = 66 * scale;
+    } else if (kind == EN_PISTON) {
+        int lo = r, hi = r;
+        while (lo > r - 4 && lo > 2 && open_for_foe(cv, c, lo - 1)) lo--;
+        while (hi < r + 4 && open_for_foe(cv, c, hi + 1)) hi++;
+        e.x = e.min_x = e.max_x = c * TILE_SIZE + 3;
+        e.min_y = lo * TILE_SIZE;
+        e.max_y = hi * TILE_SIZE + 6;
+        e.speed = 62 * scale;
+    } else if (kind == EN_WISP) {
+        e.x = c * TILE_SIZE;
+        e.y = r * TILE_SIZE;
+        e.min_x = e.x - 58;
+        e.max_x = e.x + 58;
+        e.min_y = e.y - 38;
+        e.max_y = e.y + 38;
+        e.speed = 1.35 * scale;
+    } else { /* stalker */
+        e.min_x = TILE_SIZE;
+        e.max_x = (GRID_COLS - 2) * TILE_SIZE;
+        e.min_y = TILE_SIZE;
+        e.max_y = (GRID_ROWS - 2) * TILE_SIZE;
+        e.speed = lm_min(74, 38 + (depth - 12) * 2.5);
+    }
+    cv->enemies[cv->n_enemies++] = e;
 }
 
-static void
-generate_enemies(struct lm_cavern *cv, int depth, struct plat *plats, int nplat, int spawn_col, int spawn_row,
-                 struct cell portal, struct rng *rng)
-{
-    uint8_t(*tiles)[GRID_COLS] = cv->tiles;
-    double speed_scale = lm_min(1.85, 1 + (depth - 1) * 0.062);
-    int total_desired = (int)lm_min(12, 3 + lm_floor((depth - 1) * 0.72));
-
-    struct plat patrol[96];
-    int np = 0;
-    for (int i = 0; i < nplat; i++) {
-        struct plat *p = &plats[i];
-        int len = p->end - p->start + 1;
-        if (len < 4) continue;
-        if (p->type == T_CRUMBLE) continue;
-        double mid = (p->start + p->end) / 2.0;
-        if (lm_hypot(mid - spawn_col, (p->row - 1) - spawn_row) < 6.0) continue;
-        if (p->row == portal.r + 1 && portal.c >= p->start - 1 && portal.c <= p->end + 1) continue;
-        bool bad = false;
-        for (int c = p->start; c <= p->end; c++)
-            if (tiles[p->row - 1][c] == T_BRAMBLE) { bad = true; break; }
-        if (bad) continue;
-        patrol[np++] = *p;
-    }
-    rng_shuffle(rng, patrol, np, sizeof(struct plat));
-
-    int ground_target = (int)lm_min(np, lm_ceil(total_desired * 0.52));
-    int spitters = 0, chargers = 0;
-    for (int i = 0; i < ground_target; i++) {
-        struct plat *plat = &patrol[i];
-        int plat_len = plat->end - plat->start + 1;
-        int kind = EN_BEETLE;
-
-        if (depth >= 7 && spitters < (int)lm_min(2, lm_floor((depth - 5) / 3.0)) && rng_chance(rng, 0.45)) {
-            kind = EN_SPITTER;
-            spitters++;
-        } else if (depth >= 5 && plat_len >= 5 && chargers < (int)lm_min(2, lm_floor((depth - 3) / 2.0)) && rng_chance(rng, 0.55)) {
-            kind = EN_CHARGER;
-            chargers++;
-        } else if (depth >= 2 && i % 2 == 1 && rng_chance(rng, 0.65)) {
-            kind = EN_BOUNCER;
-        }
-
-        double min_x = plat->start * TILE_SIZE + 6;
-        double max_x = (plat->end + 1) * TILE_SIZE - 28;
-        if (max_x - min_x < 36)
-            continue;
-
-        double start_x = kind == EN_SPITTER ? (min_x + max_x) * 0.5 : min_x + rng_next(rng) * (max_x - min_x);
-        double y = (plat->row - 1) * TILE_SIZE + 6;
-        double base_speed = kind == EN_CHARGER ? 66 : kind == EN_BEETLE ? 70 : kind == EN_BOUNCER ? 50 : 0;
-        int dir = rng_chance(rng, 0.5) ? 1 : -1;
-        double phase = rng_next(rng) * LM_PI * 2;
-        add_enemy(cv, kind, start_x, y, min_x, max_x, y - 50, y, base_speed * speed_scale, dir, phase);
-    }
-
-    if (depth >= 10) {
-        int stalkers = depth >= 18 ? 2 : 1;
-        for (int s = 0; s < stalkers; s++) {
-            double sx = spawn_col < GRID_COLS / 2 ? (GRID_COLS - 5 - s * 4) * TILE_SIZE : (4 + s * 4) * TILE_SIZE;
-            double sy = (3 + s * 3) * TILE_SIZE;
-            double phase = rng_next(rng) * LM_PI * 2;
-            add_enemy(cv, EN_STALKER, sx, sy, TILE_SIZE, (GRID_COLS - 2) * TILE_SIZE, TILE_SIZE, (GRID_ROWS - 2) * TILE_SIZE,
-                      lm_min(82, 46 + (depth - 10) * 3.5), 1, phase);
-        }
-    }
-
-    int remaining = total_desired - cv->n_enemies;
-    if (remaining < 0)
-        remaining = 0;
-    for (int i = 0; i < remaining; i++) {
-        int kind = EN_GLOW_BAT;
-        double roll = rng_next(rng);
-        if (depth >= 4 && roll < 0.36)
-            kind = EN_WISP;
-        else if (depth >= 3 && roll < 0.7)
-            kind = EN_PISTON;
-
-        if (kind == EN_GLOW_BAT) {
-            static int const rows[4] = {3, 6, 9, 12};
-            int row = rows[rng_pick(rng, 4)];
-            int min_c = rng_int(rng, 3, 9);
-            int max_c = rng_int(rng, (int)lm_min(28, min_c + 9), 29);
-            double start_x = ((min_c + max_c) / 2.0) * TILE_SIZE;
-            double y = row * TILE_SIZE + 4;
-            if (lm_hypot(start_x / TILE_SIZE - spawn_col, row - spawn_row) < 6)
-                continue;
-            int dir = rng_chance(rng, 0.5) ? 1 : -1;
-            double phase = rng_next(rng) * LM_PI * 2;
-            add_enemy(cv, EN_GLOW_BAT, start_x, y, min_c * TILE_SIZE, max_c * TILE_SIZE, y - 16, y + 16, 82 * speed_scale, dir, phase);
-        } else if (kind == EN_PISTON) {
-            int col = rng_int(rng, 5, GRID_COLS - 6);
-            if (abs(col - spawn_col) < 5 || abs(col - portal.c) < 3)
-                continue;
-            int top_row = rng_int(rng, 3, 5);
-            int bot_row = rng_int(rng, 12, 15);
-            if (tiles[top_row][col] == T_SOLID)
-                continue;
-            double x = col * TILE_SIZE + 3;
-            int dir = rng_chance(rng, 0.5) ? 1 : -1;
-            double phase = rng_next(rng) * LM_PI * 2;
-            add_enemy(cv, EN_PISTON, x, ((top_row + bot_row) / 2.0) * TILE_SIZE, x, x, top_row * TILE_SIZE, bot_row * TILE_SIZE,
-                      78 * speed_scale, dir, phase);
-        } else {
-            double cx = rng_int(rng, 7, GRID_COLS - 8) * TILE_SIZE;
-            double cy = rng_int(rng, 4, 12) * TILE_SIZE;
-            if (lm_hypot(cx / TILE_SIZE - spawn_col, cy / TILE_SIZE - spawn_row) < 6.5)
-                continue;
-            double phase = rng_next(rng) * LM_PI * 2;
-            add_enemy(cv, EN_WISP, cx, cy, cx - 58, cx + 58, cy - 38, cy + 38, 1.65 * speed_scale, 1, phase);
-        }
-    }
-}
-
-/* ---------------------------------------------------------------- candidate */
-
-static bool
-pick_spread(struct rng *rng, struct cell const *pool, int npool, double min_dist, struct cell const *existing, int nexisting,
-            bool occupied[GRID_ROWS][GRID_COLS], int spawn_col, int spawn_row, struct cell *out)
-{
-    struct cell shuffled[GRID_ROWS * GRID_COLS];
-    memcpy(shuffled, pool, (size_t)npool * sizeof(struct cell));
-    rng_shuffle(rng, shuffled, npool, sizeof(struct cell));
-    for (int i = 0; i < npool; i++) {
-        struct cell cand = shuffled[i];
-        if (occupied[cand.r][cand.c])
-            continue;
-        if (lm_hypot(cand.c - spawn_col, cand.r - spawn_row) < 3.5)
-            continue;
-        bool too_close = false;
-        for (int k = 0; k < nexisting; k++)
-            if (lm_hypot(cand.c - existing[k].c, cand.r - existing[k].r) < min_dist) { too_close = true; break; }
-        if (!too_close) {
-            *out = cand;
-            return true;
-        }
-    }
-    return false;
-}
+/* ------------------------------------------------------------------ build */
 
 static void
 add_collect(struct lm_cavern *cv, int kind, int powerup, int variant, double x, double y, double phase)
@@ -337,343 +211,152 @@ add_collect(struct lm_cavern *cv, int kind, int powerup, int variant, double x, 
     c->phase = phase;
 }
 
-static bool
-build_candidate(struct lm_cavern *cv, char const *seed, int depth, int biome, char const *name, struct rng *rng, bool force_bridges)
+static int
+roll_chest(struct rng *rng)
 {
-    (void)seed;
+    /* weights out of 100: shield 20, tea 22, spring 15, magnet 13, slow 12, jackpot 12, a spare life 6 */
+    static int const weight[CHEST_KINDS] = {
+        [PU_SPRING_BOOTS] = 15, [PU_LANTERN_SHIELD] = 20, [PU_TEA_THERMOS] = 22, [PU_STARLIGHT_MAGNET] = 13,
+        [PU_CLOCKWORK_SLOW] = 12, [CHEST_JACKPOT] = 12, [CHEST_LIFE] = 6};
+    int n = rng_pick(rng, 100);
+    for (int i = 0; i < CHEST_KINDS; i++) {
+        n -= weight[i];
+        if (n < 0)
+            return i;
+    }
+    return PU_TEA_THERMOS;
+}
+
+void
+lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_cavern *cv)
+{
+    struct level const *lv = &k_levels[index];
+    struct rng rng;
+    char key[160];
+    int foes = 0, gems = 0;
+    /* the foe budget is the difficulty curve: one in the first cavern, about ten by cavern seventeen */
+    int budget = (int)lm_min(12, 1 + lm_floor((depth - 1) * 0.55));
+
+    snprintf(key, sizeof(key), "%s::cavern::%d", seed, depth);
+    rng_seed(&rng, key);
     memset(cv, 0, sizeof(*cv));
     cv->depth = depth;
-    cv->biome = biome;
-    snprintf(cv->name, sizeof(cv->name), "%s", name);
-    uint8_t(*tiles)[GRID_COLS] = cv->tiles;
-
-    for (int c = 0; c < GRID_COLS; c++) {
-        tiles[0][c] = T_SOLID;
-        tiles[GRID_ROWS - 1][c] = T_SOLID;
-    }
-    for (int r = 0; r < GRID_ROWS; r++) {
-        tiles[r][0] = T_SOLID;
-        tiles[r][GRID_COLS - 1] = T_SOLID;
-    }
-    for (int c = 1; c < GRID_COLS - 1; c++) {
-        if (c <= 2 || c >= GRID_COLS - 3) {
-            if (rng_chance(rng, 0.55))
-                tiles[1][c] = T_SOLID;
-        }
-    }
-
-    bool spawn_left = depth == 1 ? true : rng_chance(rng, 0.5);
-    int spawn_col = spawn_left ? 3 : GRID_COLS - 4;
-    int spawn_row = GRID_ROWS - 2;
-
-    struct plat plats[96];
-    int nplat = 0;
-    static int const tier_rows[4] = {14, 11, 8, 5};
-    double conveyor_prob = lm_min(0.46, 0.14 + (depth - 1) * 0.032);
-    double crumble_prob = lm_min(0.35, 0.1 + (depth - 1) * 0.028);
-    int max_w = depth >= 8 ? 7 : 8;
-    int min_w = depth >= 6 ? 3 : 4;
-
-    for (int t = 0; t < 4; t++) {
-        int base_row = tier_rows[t];
-        int cursor = rng_int(rng, 1, 3);
-        int segs = 0;
-        while (cursor < GRID_COLS - 5) {
-            int width = rng_int(rng, min_w, max_w);
-            int end_col = cursor + width - 1 < GRID_COLS - 2 ? cursor + width - 1 : GRID_COLS - 2;
-            if (end_col - cursor + 1 >= 3) {
-                int row_offset = 0;
-                if (!force_bridges && t > 0 && t < 3 && rng_chance(rng, 0.3))
-                    row_offset = rng_chance(rng, 0.5) ? 1 : -1;
-                int row = base_row + row_offset;
-                if (row > 15) row = 15;
-                if (row < 4) row = 4;
-
-                int type = T_ONE_WAY;
-                double roll = rng_next(rng);
-                if (roll < conveyor_prob)
-                    type = rng_chance(rng, 0.5) ? T_CONVEYOR_LEFT : T_CONVEYOR_RIGHT;
-                else if (roll < conveyor_prob + crumble_prob && end_col - cursor + 1 <= 6)
-                    type = T_CRUMBLE;
-
-                bool valid = true;
-                for (int c = cursor; c <= end_col; c++) {
-                    if (tiles[row][c] != T_EMPTY || tiles[row - 1][c] != T_EMPTY) { valid = false; break; }
-                }
-                if (valid) {
-                    for (int c = cursor; c <= end_col; c++)
-                        tiles[row][c] = (uint8_t)type;
-                    if (nplat < 96)
-                        plats[nplat++] = (struct plat){row, cursor, end_col, type};
-                    segs++;
-                }
-            }
-            cursor = end_col + rng_int(rng, 2, depth >= 7 ? 4 : 3);
-        }
-        if (t == 0 && segs == 0) {
-            for (int c = 4; c <= 10; c++)
-                tiles[14][c] = T_ONE_WAY;
-            plats[nplat++] = (struct plat){14, 4, 10, T_ONE_WAY};
-        }
-    }
-
-    /* reliable stepping platform near spawn */
-    int ns_start = spawn_left ? 4 : GRID_COLS - 10;
-    int ns_end = spawn_left ? 9 : GRID_COLS - 5;
-    bool has_near = false;
-    for (int c = ns_start; c <= ns_end; c++) {
-        if (tiles[14][c] != T_EMPTY || tiles[15][c] != T_EMPTY) { has_near = true; break; }
-    }
-    if (!has_near || force_bridges) {
-        for (int c = ns_start; c <= ns_end; c++)
-            tiles[14][c] = T_ONE_WAY;
-        plats[nplat++] = (struct plat){14, ns_start, ns_end, T_ONE_WAY};
-    }
-
-    if (force_bridges) {
-        static int const bridges[6][3] = {{14, 12, 19}, {11, 7, 14}, {11, 18, 25}, {8, 11, 20}, {5, 5, 12}, {5, 19, 26}};
-        for (int i = 0; i < 6; i++) {
-            for (int c = bridges[i][1]; c <= bridges[i][2]; c++)
-                if (tiles[bridges[i][0]][c] == T_EMPTY)
-                    tiles[bridges[i][0]][c] = T_ONE_WAY;
-            plats[nplat++] = (struct plat){bridges[i][0], bridges[i][1], bridges[i][2], T_ONE_WAY};
-        }
-    }
-
-    /* crystal bramble hazards */
-    int ground_target = (int)lm_min(6, 1 + lm_floor(depth * 0.6));
-    int placed = 0;
-    for (int tries = 0; tries < 32 && placed < ground_target; tries++) {
-        int bc = rng_int(rng, 4, GRID_COLS - 5);
-        if (abs(bc - spawn_col) < 5)
-            continue;
-        if (tiles[16][bc] != T_EMPTY || tiles[16][bc - 1] == T_BRAMBLE || tiles[16][bc + 1] == T_BRAMBLE)
-            continue;
-        if (tiles[15][bc] == T_EMPTY && tiles[14][bc] == T_EMPTY) {
-            tiles[16][bc] = T_BRAMBLE;
-            placed++;
-        }
-    }
-
-    if (depth >= 4) {
-        int ledge_target = (int)lm_min(3, lm_floor((depth - 2) / 3.0));
-        int placed_ledge = 0;
-        struct plat wide[96];
-        int nw = 0;
-        for (int i = 0; i < nplat; i++)
-            if (plats[i].end - plats[i].start + 1 >= 6 && plats[i].type == T_ONE_WAY && plats[i].row >= 8)
-                wide[nw++] = plats[i];
-        rng_shuffle(rng, wide, nw, sizeof(struct plat));
-        for (int i = 0; i < nw; i++) {
-            if (placed_ledge >= ledge_target)
-                break;
-            int mid = (int)lm_floor((wide[i].start + wide[i].end) / 2.0);
-            if (tiles[wide[i].row - 1][mid] == T_EMPTY && tiles[wide[i].row - 2][mid] == T_EMPTY) {
-                tiles[wide[i].row - 1][mid] = T_BRAMBLE;
-                placed_ledge++;
-            }
-        }
-    }
-
-    static struct cell reach[GRID_ROWS * GRID_COLS];
-    int nreach = compute_reachable(tiles, spawn_col, spawn_row, reach);
-
-    int upper = 0, mid_cells = 0;
-    for (int i = 0; i < nreach; i++) {
-        if (reach[i].r <= 8) upper++;
-        if (reach[i].r >= 9 && reach[i].r <= 13) mid_cells++;
-    }
-    int keys_needed = (int)lm_min(8, 4 + lm_floor(depth / 3.0));
-    if (!force_bridges && (upper < 6 || mid_cells < 8 || nreach < 28))
-        return false;
-
-    /* exit portal: far from the spawn, on a sturdy ledge */
-    struct cell cand[GRID_ROWS * GRID_COLS];
-    double score[GRID_ROWS * GRID_COLS];
-    int ncand = 0;
-    for (int i = 0; i < nreach; i++) {
-        struct cell cell = reach[i];
-        if (cell.c < 2 || cell.c > GRID_COLS - 4) continue;
-        if (cell.r > 13) continue;
-        if (lm_hypot(cell.c - spawn_col, cell.r - spawn_row) < 10) continue;
-        int s1 = tiles[cell.r + 1][cell.c], s2 = tiles[cell.r + 1][cell.c + 1];
-        if ((s1 != T_ONE_WAY && s1 != T_SOLID) || (s2 != T_ONE_WAY && s2 != T_SOLID)) continue;
-        if (!(tiles[cell.r][cell.c] == T_EMPTY && tiles[cell.r][cell.c + 1] == T_EMPTY &&
-              tiles[cell.r - 1][cell.c] == T_EMPTY && tiles[cell.r - 1][cell.c + 1] == T_EMPTY))
-            continue;
-        cand[ncand] = cell;
-        score[ncand] = (16 - cell.r) * 1.8 + lm_fabs(cell.c - spawn_col);
-        ncand++;
-    }
-
-    struct cell portal_cell;
-    if (ncand > 0) {
-        /* stable sort, highest score first (same result as Array.prototype.sort with (a,b)=>scoreB-scoreA) */
-        for (int i = 1; i < ncand; i++) {
-            struct cell kc = cand[i];
-            double ks = score[i];
-            int j = i - 1;
-            while (j >= 0 && ks - score[j] > 0) {
-                cand[j + 1] = cand[j];
-                score[j + 1] = score[j];
-                j--;
-            }
-            cand[j + 1] = kc;
-            score[j + 1] = ks;
-        }
-        int top = ncand < 5 ? ncand : 5;
-        portal_cell = cand[rng_pick(rng, top)];
-    } else {
-        int fb = spawn_left ? GRID_COLS - 5 : 3;
-        tiles[16][fb] = T_EMPTY;
-        tiles[16][fb + 1] = T_EMPTY;
-        portal_cell = (struct cell){fb, 16};
-    }
-
-    static bool occupied[GRID_ROWS][GRID_COLS];
-    memset(occupied, 0, sizeof(occupied));
-    occupied[spawn_row][spawn_col] = true;
-    occupied[portal_cell.r][portal_cell.c] = true;
-    occupied[portal_cell.r][portal_cell.c + 1] = true;
-
-    /* cavern keys */
-    static struct cell key_pool[GRID_ROWS * GRID_COLS];
-    int npool = 0;
     {
-        struct cell tmp[GRID_ROWS * GRID_COLS];
-        int n;
-        n = 0;
-        for (int i = 0; i < nreach; i++) if (reach[i].r <= 8) tmp[n++] = reach[i];
-        rng_shuffle(rng, tmp, n, sizeof(struct cell));
-        memcpy(key_pool + npool, tmp, (size_t)n * sizeof(struct cell)); npool += n;
-        n = 0;
-        for (int i = 0; i < nreach; i++) if (reach[i].r > 8 && reach[i].r <= 13) tmp[n++] = reach[i];
-        rng_shuffle(rng, tmp, n, sizeof(struct cell));
-        memcpy(key_pool + npool, tmp, (size_t)n * sizeof(struct cell)); npool += n;
-        n = 0;
-        for (int i = 0; i < nreach; i++) if (reach[i].r > 13) tmp[n++] = reach[i];
-        rng_shuffle(rng, tmp, n, sizeof(struct cell));
-        memcpy(key_pool + npool, tmp, (size_t)n * sizeof(struct cell)); npool += n;
+        static int const order[5] = {BIOME_TIMBER_HEARTH, BIOME_GLOW_MOSS, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_FROST_LANTERN};
+        cv->biome = order[(depth - 1) % 5];
+    }
+    snprintf(cv->name, sizeof(cv->name), "%s", lv->name);
+    snprintf(cv->hint, sizeof(cv->hint), "%s", lv->hint);
+
+    for (int c = 0; c < GRID_COLS; c++)
+        cv->tiles[0][c] = cv->tiles[GRID_ROWS - 1][c] = T_SOLID;
+    for (int r = 0; r < GRID_ROWS; r++)
+        cv->tiles[r][0] = cv->tiles[r][GRID_COLS - 1] = T_SOLID;
+
+#define COL(c) (mirror ? GRID_COLS - 1 - (c) : (c))
+    /* the terrain first: foes read it to work out their patrols */
+    for (int i = 0; i < lv->n; i++) {
+        struct op const *o = &lv->ops[i];
+        if (o->kind == OP_FILL) {
+            int t = o->arg;
+            if (mirror && t == T_CONVEYOR_LEFT) t = T_CONVEYOR_RIGHT;
+            else if (mirror && t == T_CONVEYOR_RIGHT) t = T_CONVEYOR_LEFT;
+            for (int r = o->r0; r <= o->r1; r++)
+                for (int c = o->c0; c <= o->c1; c++)
+                    cv->tiles[r][COL(c)] = (uint8_t)t;
+        } else if (o->kind == OP_LADDER) {
+            for (int r = o->r0; r <= o->r1; r++)
+                cv->ladders[r][COL(o->c0)] = 1;
+        }
     }
 
-    struct cell placed_cells[32];
-    int nplaced = 0;
-    for (int i = 0; i < keys_needed; i++) {
-        struct cell cell;
-        bool ok = pick_spread(rng, key_pool, npool, 4.6, placed_cells, nplaced, occupied, spawn_col, spawn_row, &cell) ||
-                  pick_spread(rng, reach, nreach, 2.2, placed_cells, nplaced, occupied, spawn_col, spawn_row, &cell);
-        if (!ok) {
-            if (!force_bridges)
-                return false;
+    for (int i = 0; i < lv->n; i++) {
+        struct op const *o = &lv->ops[i];
+        int c = COL(o->c0), r = o->r0;
+        double x = c * TILE_SIZE + TILE_SIZE * 0.5, y = r * TILE_SIZE;
+        switch (o->kind) {
+        case OP_MOVER: {
+            if (cv->n_movers >= LM_MAX_MOVERS)
+                break;
+            struct lm_mover *m = &cv->movers[cv->n_movers++];
+            int w = o->arg;
+            int a = mirror ? GRID_COLS - o->c0 - w : o->c0, b = mirror ? GRID_COLS - o->c1 - w : o->c1;
+            m->width = w * TILE_SIZE;
+            m->vertical = o->r0 != o->r1;
+            m->min_x = (a < b ? a : b) * TILE_SIZE;
+            m->max_x = (a < b ? b : a) * TILE_SIZE;
+            m->min_y = o->r0 * TILE_SIZE;
+            m->max_y = o->r1 * TILE_SIZE;
+            m->speed = lm_min(96, 54 + (depth - 1) * 2.2);
+            m->direction = cv->n_movers % 2 ? 1 : -1;
+            if (mirror && !m->vertical)
+                m->direction = -m->direction;
+            m->x = m->direction > 0 ? m->min_x : m->max_x;
+            m->y = m->vertical ? (m->direction > 0 ? m->min_y : m->max_y) : m->min_y;
             break;
         }
-        occupied[cell.r][cell.c] = true;
-        placed_cells[nplaced++] = cell;
-        double wx = cell.c * TILE_SIZE + TILE_SIZE * 0.5;
-        double wy = cell.r * TILE_SIZE + TILE_SIZE * 0.42;
-        add_collect(cv, COL_KEY, 0, 0, wx, wy, rng_next(rng) * LM_PI * 2);
-    }
-    if (cv->n_collect < keys_needed && !force_bridges)
-        return false;
-
-    /* Power-ups are no longer lying around the caverns (they are bought in the shop). The placement still runs so
-       every random draw and reserved cell stays the same and the rest of the cavern is unchanged. */
-    int pu_types[PU_COUNT] = {PU_SPRING_BOOTS, PU_LANTERN_SHIELD, PU_TEA_THERMOS, PU_STARLIGHT_MAGNET, PU_CLOCKWORK_SLOW};
-    int pu_count = depth == 1 ? 2 : rng_chance(rng, 0.55) ? 2 : 1;
-    rng_shuffle(rng, pu_types, PU_COUNT, sizeof(int));
-    for (int i = 0; i < pu_count; i++) {
-        struct cell cell;
-        if (!pick_spread(rng, reach, nreach, 3.8, placed_cells, nplaced, occupied, spawn_col, spawn_row, &cell))
+        case OP_START:
+            cv->spawn.x = x;
+            cv->spawn.y = y + TILE_SIZE - 26;
             break;
-        occupied[cell.r][cell.c] = true;
-        placed_cells[nplaced++] = cell;
-        double wx = cell.c * TILE_SIZE + TILE_SIZE * 0.5;
-        double wy = cell.r * TILE_SIZE + TILE_SIZE * 0.42;
-        (void)wx; (void)wy;
-        (void)rng_next(rng);
-    }
-
-    /* bonus relics */
-    int relic_count = rng_int(rng, 3 + (int)lm_min(2, lm_floor(depth / 5.0)), 5 + (int)lm_min(2, lm_floor(depth / 6.0)));
-    for (int i = 0; i < relic_count; i++) {
-        struct cell cell;
-        if (!pick_spread(rng, reach, nreach, 2.8, placed_cells, nplaced, occupied, spawn_col, spawn_row, &cell))
+        case OP_EXIT: {
+            int left = mirror ? GRID_COLS - 2 - o->c0 : o->c0;
+            cv->portal.x = left * TILE_SIZE;
+            cv->portal.y = (r - 1) * TILE_SIZE;
+            cv->portal.col = left;
+            cv->portal.row = r;
             break;
-        occupied[cell.r][cell.c] = true;
-        if (nplaced < 32)
-            placed_cells[nplaced++] = cell;
-        double wx = cell.c * TILE_SIZE + TILE_SIZE * 0.5;
-        double wy = cell.r * TILE_SIZE + TILE_SIZE * 0.48;
-        add_collect(cv, COL_RELIC, 0, i % 3, wx, wy, rng_next(rng) * LM_PI * 2);
+        }
+        case OP_KEY:
+            add_collect(cv, COL_KEY, 0, 0, x, y + TILE_SIZE * 0.42, rng_next(&rng) * LM_PI * 2);
+            cv->keys_total++;
+            break;
+        case OP_GEM:
+            add_collect(cv, COL_RELIC, 0, gems++ % 3, x, y + TILE_SIZE * 0.48, rng_next(&rng) * LM_PI * 2);
+            break;
+        case OP_CHEST:
+            /* luck: about one cavern in three has its chest */
+            #ifdef LM_ALL_CHESTS
+            if (true) {
+#else
+            if (depth >= 2 && rng_chance(&rng, 0.35)) {
+#endif
+                int prize = roll_chest(&rng);
+                add_collect(cv, COL_CHEST, prize, 0, x, y + TILE_SIZE * 0.6, rng_next(&rng) * LM_PI * 2);
+            }
+            break;
+        case OP_FOE:
+            if (foes < budget) {
+                add_foe(cv, o->arg, c, r, &rng);
+                foes++;
+            }
+            break;
+        default:
+            break;
+        }
     }
-
-    generate_enemies(cv, depth, plats, nplat, spawn_col, spawn_row, portal_cell, rng);
+#undef COL
 
     /* ambient hanging brass lanterns */
     static int const lantern_cols[5] = {5, 11, 16, 21, 26};
     for (int i = 0; i < 5; i++) {
-        if (rng_chance(rng, 0.8)) {
-            int chain = rng_int(rng, 16, 44);
+        if (rng_chance(&rng, 0.8)) {
+            int chain = rng_int(&rng, 16, 44);
             struct lm_lantern *l = &cv->lanterns[cv->n_lanterns++];
-            l->x = lantern_cols[i] * TILE_SIZE + rng_int(rng, -8, 8);
+            l->x = lantern_cols[i] * TILE_SIZE + rng_int(&rng, -8, 8);
             l->y = TILE_SIZE + chain;
-            l->sway_phase = rng_next(rng) * LM_PI * 2;
+            l->sway_phase = rng_next(&rng) * LM_PI * 2;
             l->chain_length = chain;
         }
     }
-
-    cv->spawn.x = spawn_col * TILE_SIZE + TILE_SIZE * 0.5;
-    cv->spawn.y = spawn_row * TILE_SIZE + TILE_SIZE - 26;
-    cv->portal.x = portal_cell.c * TILE_SIZE;
-    cv->portal.y = (portal_cell.r - 1) * TILE_SIZE;
-    cv->portal.col = portal_cell.c;
-    cv->portal.row = portal_cell.r;
-    cv->keys_total = 0;
-    for (int i = 0; i < cv->n_collect; i++)
-        if (cv->collect[i].kind == COL_KEY)
-            cv->keys_total++;
-    return true;
 }
-
-static int const k_biome_order[5] = {BIOME_TIMBER_HEARTH, BIOME_GLOW_MOSS, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_FROST_LANTERN};
 
 void
 lm_generate_cavern(char const *seed, int depth, struct lm_cavern *out)
 {
-    struct rng base;
     char key[160];
-    char name[96];
-    int biome;
-
-    snprintf(key, sizeof(key), "%s::meta::%d", seed, depth);
-    rng_seed(&base, key);
-    if (depth <= 5) {
-        biome = k_biome_order[depth - 1];
-    } else {
-        int idx = (depth - 1 + rng_int(&base, 0, 1)) % 5;
-        biome = k_biome_order[idx];
-    }
-    if (depth == 1) {
-        snprintf(name, sizeof(name), "Central Hearth Cavern");
-    } else if (depth % SHOP_INTERVAL == 0) {
-        snprintf(name, sizeof(name), "Old Barnaby\xe2\x80\x99s Threshold");
-    } else {
-        int p = rng_pick(&base, 5);
-        int n = rng_pick(&base, 5);
-        snprintf(name, sizeof(name), "%s %s", lm_biomes[biome].prefixes[p], lm_biomes[biome].nouns[n]);
-    }
-
-    for (int attempt = 0; attempt < 18; attempt++) {
-        struct rng rng;
-        snprintf(key, sizeof(key), "%s::d%d::a%d", seed, depth, attempt);
-        rng_seed(&rng, key);
-        if (build_candidate(out, seed, depth, biome, name, &rng, attempt >= 13))
-            return;
-    }
-    {
-        struct rng rng;
-        snprintf(key, sizeof(key), "%s::fallback::%d", seed, depth);
-        rng_seed(&rng, key);
-        build_candidate(out, seed, depth, biome, name, &rng, true);
-    }
+    struct rng r;
+    snprintf(key, sizeof(key), "%s::mirror::%d", seed, depth);
+    rng_seed(&r, key);
+    lm_build_level(pick_level(seed, depth), depth > 1 && rng_chance(&r, 0.5), seed, depth, out);
 }
