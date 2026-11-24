@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "lm_math.h"
 
@@ -15,9 +16,11 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.6"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 7
+#define LM_VERSION "0.7"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 8
 #define START_LIVES 5
+#define MAX_CONTINUES 3
+#define WORLD_SIZE 10 /* caverns to a world */
 #define MAX_LIVES 9
 #define BASE_HEARTS 2 /* hits you can take before losing a life */
 #define SHIELD_CAVERNS 3 /* a bought Lantern Shield renews this many times */
@@ -63,7 +66,7 @@ enum lm_shop_item {
     SHOP_SPRING_BOOTS, SHOP_LANTERN_SHIELD, SHOP_TEA_THERMOS, SHOP_STARLIGHT_MAGNET, SHOP_CLOCKWORK_SLOW,
     SHOP_EXTRA_LIFE,
     /* Special Wares: unlock at later shops */
-    SHOP_DELVERS_CACHE, SHOP_PHOENIX_FEATHER,
+    SHOP_DELVERS_CACHE, SHOP_PHOENIX_FEATHER, SHOP_CONTINUE,
     SHOP_COUNT
 };
 enum lm_shop_tier { TIER_SUPPLY, TIER_GEAR, TIER_MASTERWORK, TIER_POWER, TIER_SPECIAL };
@@ -95,14 +98,12 @@ extern struct lm_biome const lm_biomes[BIOME_COUNT];
 extern struct lm_powerup_def const lm_powerups[PU_COUNT];
 extern struct lm_perk_def const lm_perks[PERK_COUNT];
 extern struct lm_shop_def const lm_shop[SHOP_COUNT];
-extern char const *const lm_seed_words[];
-extern int const lm_seed_word_count;
 
 /* ----------------------------------------------------------------- cavern */
 
 enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST };
 /* what a chest holds: one of enum lm_powerup, or one of these */
-enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_KINDS };
+enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_CONTINUE, CHEST_KINDS };
 
 struct lm_collectable {
     int kind;       /* enum lm_collect_kind */
@@ -198,7 +199,7 @@ struct lm_banner { char title[96], subtitle[160]; double remaining, duration; bo
 #define LM_MOTES 34
 
 /* One-shot events the app consumes after each update. */
-enum lm_event { EV_NONE = 0, EV_CAVERN_ADVANCED = 1, EV_OPEN_SHOP = 2, EV_GAME_OVER = 4 };
+enum lm_event { EV_NONE = 0, EV_CAVERN_ADVANCED = 1, EV_OPEN_SHOP = 2, EV_GAME_OVER = 4, EV_CONTINUE = 8 };
 
 struct lm_run_summary {
     int depth_reached, caverns_cleared, score, high_score;
@@ -206,6 +207,7 @@ struct lm_run_summary {
     int relics, relic_points_left, keys;
     char seed[40];
     bool air; /* true = ran out of air, false = out of hearts */
+    bool won; /* every cavern built so far has been cleared */
 };
 
 struct lm_game {
@@ -221,6 +223,11 @@ struct lm_game {
     double power_time[PU_COUNT]; /* seconds left on the timed powers (Spring, Magnet, Slow); powers[] = stacks (the x2 / x3) */
     bool next_shield;
     int lives;           /* lives left, this one included */
+    int continues, continues_bought;
+    int world_score;     /* score on entering this world: a continue goes back to it */
+    bool flawless;       /* no life lost in this world yet: finishing it earns a continue */
+    bool flawless_award; /* set when that continue has just been handed out */
+    bool down;           /* out of lives, waiting for the player to use a continue or give up */
     int run_start_high, run_start_depth; /* records when the run began, for the "new best" banners */
     bool phoenix;        /* Phoenix Feather packed: one free rising when the last life goes */
     double respawn_timer; /* >0 while the miner is down and about to restart the cavern */
@@ -267,6 +274,12 @@ void lm_set_paused(struct lm_game *g, bool paused);
 void lm_set_input(struct lm_game *g, bool left, bool right, bool up, bool down, bool jump);
 void lm_step(struct lm_game *g, double dt);
 void lm_leave_shop(struct lm_game *g);
+int lm_world_of(int depth);        /* 1, 2, 3 ... */
+void lm_use_continue(struct lm_game *g);
+void lm_give_up(struct lm_game *g);
+/* A run in progress, as text. `in_shop` says where to resume. lm_load_run returns false if the file is no good. */
+void lm_save_run(struct lm_game const *g, FILE *f, bool in_shop);
+bool lm_load_run(struct lm_game *g, FILE *f, bool *in_shop);
 /* Shop: status of an item for the current wallet. */
 struct lm_shop_status { bool can_buy; char status[48]; char owned[32]; bool is_owned; };
 void lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *out);

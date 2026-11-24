@@ -116,6 +116,7 @@ clear_inputs(struct lm_game *g)
 
 static void
 emit_game_over(struct lm_game *g, bool air);
+static void set_banner(struct lm_game *g, char const *title, char const *sub, double secs);
 static void lose_life(struct lm_game *g, bool air);
 
 /* ---------------------------------------------------------------------- load */
@@ -231,8 +232,6 @@ lm_set_records(struct lm_game *g, int high_score, int best_depth)
     g->best_depth = best_depth;
 }
 
-static void set_banner(struct lm_game *g, char const *title, char const *sub, double secs);
-
 void
 lm_start_run(struct lm_game *g, char const *seed)
 {
@@ -244,6 +243,11 @@ lm_start_run(struct lm_game *g, char const *seed)
     g->hearts = BASE_HEARTS;
     g->lives = START_LIVES;
     g->phoenix = false;
+    g->continues = g->continues_bought = 0;
+    g->world_score = 0;
+    g->flawless = true;
+    g->flawless_award = false;
+    g->down = false;
     g->respawn_timer = 0;
     g->run_start_high = g->high_score; /* records as they stood when this run began */
     g->run_start_depth = g->best_depth;
@@ -315,6 +319,8 @@ int
 lm_shop_cost(struct lm_game const *g, int item)
 {
     int cost = lm_shop[item].cost;
+    if (item == SHOP_CONTINUE)
+        cost += cost / 2 * g->continues_bought;
     if (power_is_timed(item))
         cost += cost * 3 * g->powers[item - SHOP_SPRING_BOOTS] / 4;
     cost = cost * (100 - lm_shop_discount(g)) / 100;
@@ -334,7 +340,19 @@ lm_shop_discount(struct lm_game const *g)
 int
 lm_shop_unlock_at(int item)
 {
-    return item == SHOP_DELVERS_CACHE ? 3 : item == SHOP_PHOENIX_FEATHER ? 5 : 1;
+    /* the first stall sells the basics, and each one after brings something new */
+    switch (item) {
+    case SHOP_SPRING_BOOTS: case SHOP_LANTERN_SHIELD: case SHOP_CONVEYOR_CLEATS: case SHOP_CONTINUE:
+        return 2;
+    case SHOP_STARLIGHT_MAGNET: case SHOP_BRASS_LANTERN: case SHOP_FEATHERSTEP: case SHOP_DELVERS_CACHE:
+        return 3;
+    case SHOP_CLOCKWORK_SLOW: case SHOP_GEM_RESONANCE: case SHOP_EXTRA_HEARTH: case SHOP_PHOENIX_FEATHER:
+        return 4;
+    case SHOP_CHRONOMETER:
+        return 5;
+    default:
+        return 1;
+    }
 }
 
 void
@@ -344,7 +362,19 @@ lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *ou
     char a[24], b[24];
     int cost = lm_shop_cost(g, item);
     memset(out, 0, sizeof(*out));
-    if (item == SHOP_KETTLE_BREW) {
+    if (g->depth / SHOP_INTERVAL < lm_shop_unlock_at(item)) {
+        snprintf(out->owned, sizeof(out->owned), "Locked");
+        snprintf(out->status, sizeof(out->status), "Stall %d unlocks", lm_shop_unlock_at(item));
+        return;
+    }
+    if (item == SHOP_CONTINUE) {
+        snprintf(out->owned, sizeof(out->owned), "%d held", g->continues);
+        if (g->continues >= MAX_CONTINUES) {
+            snprintf(out->status, sizeof(out->status), "Max Held");
+            out->is_owned = true;
+            return;
+        }
+    } else if (item == SHOP_KETTLE_BREW) {
         if (g->hearts >= g->max_hearts) {
             snprintf(out->status, sizeof(out->status), "Full Hearts");
             snprintf(out->owned, sizeof(out->owned), "%d/%d", g->hearts, g->max_hearts);
@@ -367,12 +397,6 @@ lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *ou
             return;
         }
     } else if (item == SHOP_DELVERS_CACHE || item == SHOP_PHOENIX_FEATHER) {
-        int need = lm_shop_unlock_at(item);
-        if (g->depth / SHOP_INTERVAL < need) {
-            snprintf(out->owned, sizeof(out->owned), "Locked");
-            snprintf(out->status, sizeof(out->status), "Stall %d unlocks", need);
-            return;
-        }
         if (item == SHOP_PHOENIX_FEATHER && g->phoenix) {
             snprintf(out->owned, sizeof(out->owned), "Packed");
             snprintf(out->status, sizeof(out->status), "Ready");
@@ -422,9 +446,15 @@ lm_shop_purchase(struct lm_game *g, int item)
 {
     struct lm_shop_def const *it = &lm_shop[item];
     int cost = lm_shop_cost(g, item);
-    if (g->relic_points < cost)
+    if (g->relic_points < cost || g->depth / SHOP_INTERVAL < lm_shop_unlock_at(item))
         return false;
-    if (item == SHOP_KETTLE_BREW) {
+    if (item == SHOP_CONTINUE) {
+        if (g->continues >= MAX_CONTINUES)
+            return false;
+        g->relic_points -= cost;
+        g->continues += 1;
+        g->continues_bought += 1;
+    } else if (item == SHOP_KETTLE_BREW) {
         if (g->hearts >= g->max_hearts)
             return false;
         g->relic_points -= cost;
@@ -440,15 +470,13 @@ lm_shop_purchase(struct lm_game *g, int item)
         g->relic_points -= cost;
         g->lives += 1;
     } else if (item == SHOP_DELVERS_CACHE) {
-        if (g->depth / SHOP_INTERVAL < lm_shop_unlock_at(item))
-            return false;
         g->relic_points -= cost;
         g->lives = g->lives + 2 < MAX_LIVES ? g->lives + 2 : MAX_LIVES;
         g->hearts = g->max_hearts;
         if (g->powers[PU_TEA_THERMOS] < 3)
             g->powers[PU_TEA_THERMOS] += 1;
     } else if (item == SHOP_PHOENIX_FEATHER) {
-        if (g->phoenix || g->depth / SHOP_INTERVAL < lm_shop_unlock_at(item))
+        if (g->phoenix)
             return false;
         g->relic_points -= cost;
         g->phoenix = true;
@@ -490,17 +518,38 @@ set_banner(struct lm_game *g, char const *title, char const *sub, double secs)
     g->banner.active = true;
 }
 
+int
+lm_world_of(int depth)
+{
+    return (depth - 1) / WORLD_SIZE + 1;
+}
+
+/* Loads cavern `depth` with its name across the screen, noting the start of a new world. */
+static void
+enter_cavern(struct lm_game *g, int depth)
+{
+    char t[128], s[200];
+    if ((depth - 1) % WORLD_SIZE == 0 && depth != g->depth) {
+        g->world_score = g->score;
+        g->flawless = true;
+    }
+    g->depth = depth;
+    load_cavern(g, depth);
+    snprintf(t, sizeof(t), "Cavern %02d \xc2\xb7 %s", depth, g->cavern.name);
+    if ((depth - 1) % WORLD_SIZE == 0)
+        snprintf(s, sizeof(s), "World %d \xc2\xb7 %s", lm_world_of(depth), g->cavern.hint);
+    else
+        snprintf(s, sizeof(s), "%s \xc2\xb7 Gather %d Keys", g->cavern.hint, g->cavern.keys_total);
+    set_banner(g, t, s, 1.5);
+}
+
 void
 lm_leave_shop(struct lm_game *g)
 {
-    char t[128], s[200];
-    g->depth += 1;
     g->paused = false;
+    g->flawless_award = false;
     clear_inputs(g);
-    load_cavern(g, g->depth);
-    snprintf(t, sizeof(t), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
-    snprintf(s, sizeof(s), "%s \xc2\xb7 Gather %d Keys", g->cavern.hint, g->cavern.keys_total);
-    set_banner(g, t, s, 1.4);
+    enter_cavern(g, g->depth + 1);
     lm_audio_set_music_mode(MUSIC_CAVERN, 1 + lm_min(0.24, (g->depth - 1) * 0.02));
 }
 
@@ -660,7 +709,7 @@ check_pit(struct lm_game *g, struct lm_player *p)
     spawn_burst(g, cx, p->y + p->height, 18, lm_biomes[g->cavern.biome].accent_spec, 170);
     if (p->invuln <= 0)
         damage_player(g, cx, p->y + p->height);
-    if (g->respawn_timer > 0 || (g->events & EV_GAME_OVER))
+    if (g->respawn_timer > 0 || g->down || (g->events & EV_GAME_OVER))
         return true;
     p->x = g->safe_x;
     p->y = g->safe_y;
@@ -1219,12 +1268,18 @@ open_chest(struct lm_game *g, struct lm_collectable const *item)
     g->chest_taken = g->depth;
     if (prize == CHEST_LIFE && g->lives >= MAX_LIVES)
         prize = CHEST_JACKPOT;
+    if (prize == CHEST_CONTINUE && g->continues >= MAX_CONTINUES)
+        prize = CHEST_JACKPOT;
     if (prize == PU_TEA_THERMOS && g->powers[PU_TEA_THERMOS] >= 3)
         prize = CHEST_JACKPOT;
     if (prize == CHEST_LIFE) {
         g->lives += 1;
         color = 0xf43fa5;
         snprintf(buf, sizeof(buf), "SPARE LANTERN! +1 LIFE");
+    } else if (prize == CHEST_CONTINUE) {
+        g->continues += 1;
+        color = 0x2ce87d;
+        snprintf(buf, sizeof(buf), "RARE FIND! +1 CONTINUE");
     } else if (prize == CHEST_JACKPOT) {
         int pts = 600 + g->depth * 40;
         g->relic_points += pts;
@@ -1343,8 +1398,15 @@ check_portal(struct lm_game *g)
         g->adv.total_score = g->score;
         g->adv.air_bonus = total;
         g->events |= EV_CAVERN_ADVANCED;
+        if (g->depth % WORLD_SIZE == 0 && g->flawless && g->continues < MAX_CONTINUES) {
+            g->continues += 1; /* a whole world without losing a life */
+            g->flawless_award = true;
+        }
 
-        if (g->depth % SHOP_INTERVAL == 0) {
+        if (g->depth >= lm_level_count()) {
+            emit_game_over(g, false);
+            g->summary.won = true;
+        } else if (g->depth % SHOP_INTERVAL == 0) {
             g->paused = true;
             clear_inputs(g);
             lm_audio_set_music_mode(MUSIC_CAMPFIRE, 1);
@@ -1394,7 +1456,8 @@ emit_game_over(struct lm_game *g, bool air)
     g->paused = true;
     clear_inputs(g);
     lm_audio_set_music_mode(MUSIC_NONE, 1);
-    lm_audio_game_over();
+    if (!(g->transition_locked && g->depth >= lm_level_count()))
+        lm_audio_game_over();
     rumble(g, 0.8, 0.45);
 
     bool new_hi = g->score > g->run_start_high;
@@ -1413,6 +1476,7 @@ emit_game_over(struct lm_game *g, bool air)
     s->keys = g->total_keys_run;
     snprintf(s->seed, sizeof(s->seed), "%s", g->seed);
     s->air = air;
+    s->won = false;
     g->events |= EV_GAME_OVER;
 }
 
@@ -1421,16 +1485,27 @@ static void
 lose_life(struct lm_game *g, bool air)
 {
     struct lm_player const *p = &g->player;
-    if ((g->events & EV_GAME_OVER) || g->respawn_timer > 0)
+    if ((g->events & EV_GAME_OVER) || g->down || g->respawn_timer > 0)
         return;
     if (g->lives <= 1 && g->phoenix) {
         g->phoenix = false;
         g->lives = 3; /* the feather's flame; the life being lost now comes off this */
         spawn_float(g, p->x + p->width * 0.5, p->y - 24, "PHOENIX RISES!", 0xff6b3d);
     }
+    g->flawless = false;
     if (g->lives <= 1) {
         g->lives = 0;
-        emit_game_over(g, air);
+        if (g->continues > 0) {
+            g->down = true;
+            g->paused = true;
+            clear_inputs(g);
+            lm_audio_set_music_mode(MUSIC_NONE, 1);
+            lm_audio_game_over();
+            rumble(g, 0.8, 0.45);
+            g->events |= EV_CONTINUE;
+        } else {
+            emit_game_over(g, air);
+        }
         return;
     }
     g->lives -= 1;
@@ -1557,13 +1632,7 @@ lm_step(struct lm_game *g, double dt)
         update_particles(g, dt);
         update_floats(g, dt);
         if (g->pending_advance <= 0) {
-            g->depth += 1;
-            load_cavern(g, g->depth);
-            {
-                char t[128];
-                snprintf(t, sizeof(t), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
-                set_banner(g, t, g->cavern.hint, 1.4);
-            }
+            enter_cavern(g, g->depth + 1);
             lm_audio_update_tempo(1 + lm_min(0.24, (g->depth - 1) * 0.02));
         }
         return;
@@ -1579,7 +1648,7 @@ lm_step(struct lm_game *g, double dt)
     update_floats(g, dt);
     update_crumbles(g, dt);
     update_movers(g, dt);
-#define STEP_ENDED() ((g->events & EV_GAME_OVER) || g->respawn_timer > 0)
+#define STEP_ENDED() ((g->events & EV_GAME_OVER) || g->down || g->respawn_timer > 0)
     update_player(g, dt);
     if (STEP_ENDED())
         return;
@@ -1593,4 +1662,134 @@ lm_step(struct lm_game *g, double dt)
     check_portal(g);
     update_air(g, dt);
 #undef STEP_ENDED
+}
+
+/* ------------------------------------------------------------- continues */
+
+void
+lm_use_continue(struct lm_game *g)
+{
+    if (!g->down || g->continues <= 0)
+        return;
+    g->continues -= 1;
+    g->down = false;
+    g->paused = false;
+    g->events = 0;
+    g->lives = START_LIVES;
+    g->hearts = g->max_hearts;
+    g->score = g->world_score;
+    g->chest_taken = 0;
+    g->respawn_timer = g->pending_advance = 0;
+    clear_inputs(g);
+    {
+        int world_start = (lm_world_of(g->depth) - 1) * WORLD_SIZE + 1;
+        g->depth = 0; /* so that entering counts as arriving */
+        enter_cavern(g, world_start);
+    }
+    g->running = true;
+    lm_audio_set_music_mode(MUSIC_CAVERN, 1.0);
+}
+
+void
+lm_give_up(struct lm_game *g)
+{
+    if (!g->down)
+        return;
+    g->down = false;
+    emit_game_over(g, false);
+}
+
+/* ---------------------------------------------------------------- saving */
+
+void
+lm_save_run(struct lm_game const *g, FILE *f, bool in_shop)
+{
+    /* caught between the portal and the next cavern: resume in the next one */
+    int depth = g->depth + (g->pending_advance > 0 ? 1 : 0);
+    fprintf(f, "version=1\nseed=%s\ndepth=%d\nin_shop=%d\ndown=%d\n", g->seed, depth, in_shop, g->down);
+    fprintf(f, "score=%d\nworld_score=%d\nrelic_points=%d\nlives=%d\nhearts=%d\nmax_hearts=%d\n", g->score, g->world_score,
+            g->relic_points, g->lives, g->hearts, g->max_hearts);
+    fprintf(f, "continues=%d\ncontinues_bought=%d\nflawless=%d\nphoenix=%d\nnext_shield=%d\nshield_on=%d\n", g->continues,
+            g->continues_bought, g->flawless, g->phoenix, g->next_shield, g->player.has_shield && g->pending_advance <= 0);
+    fprintf(f, "relics=%d\nkeys=%d\nchest_taken=%d\n", g->total_relics_run, g->total_keys_run, g->chest_taken);
+    for (int i = 0; i < PERK_COUNT; i++)
+        fprintf(f, "perk%d=%d\n", i, g->perks[i]);
+    for (int i = 0; i < PU_COUNT; i++)
+        fprintf(f, "power%d=%d\ntime%d=%d\n", i, g->powers[i], i, (int)(g->power_time[i] * 1000));
+}
+
+bool
+lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
+{
+    char line[96], seed[40] = "";
+    int version = 0, depth = 0, shop = 0, down = 0, shield_on = 0;
+    int perks[PERK_COUNT] = {0}, powers[PU_COUNT] = {0}, times[PU_COUNT] = {0};
+    int v[16] = {0};
+    static char const *const names[] = {"score", "world_score", "relic_points", "lives", "hearts", "max_hearts", "continues",
+                                        "continues_bought", "flawless", "phoenix", "next_shield", "relics", "keys", "chest_taken"};
+    while (fgets(line, sizeof(line), f)) {
+        char *eq = strchr(line, '=');
+        int n, k;
+        if (!eq)
+            continue;
+        *eq++ = 0;
+        eq[strcspn(eq, "\r\n")] = 0;
+        n = atoi(eq);
+        if (!strcmp(line, "version")) version = n;
+        else if (!strcmp(line, "seed")) snprintf(seed, sizeof(seed), "%.39s", eq);
+        else if (!strcmp(line, "depth")) depth = n;
+        else if (!strcmp(line, "in_shop")) shop = n;
+        else if (!strcmp(line, "down")) down = n;
+        else if (!strcmp(line, "shield_on")) shield_on = n;
+        else if (!strncmp(line, "perk", 4) && (k = atoi(line + 4)) >= 0 && k < PERK_COUNT) perks[k] = n;
+        else if (!strncmp(line, "power", 5) && (k = atoi(line + 5)) >= 0 && k < PU_COUNT) powers[k] = n;
+        else if (!strncmp(line, "time", 4) && (k = atoi(line + 4)) >= 0 && k < PU_COUNT) times[k] = n;
+        else
+            for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+                if (!strcmp(line, names[i]))
+                    v[i] = n;
+    }
+    if (version != 1 || depth < 1 || depth > lm_level_count() || v[5] < 1 || (!down && v[3] < 1))
+        return false;
+
+    lm_start_run(g, seed);
+    g->depth = depth;
+    g->score = v[0];
+    g->world_score = v[1];
+    g->relic_points = v[2];
+    g->lives = v[3];
+    g->max_hearts = v[5] > 5 ? 5 : v[5];
+    g->hearts = v[4] < 1 ? g->max_hearts : v[4] > g->max_hearts ? g->max_hearts : v[4];
+    g->continues = v[6];
+    g->continues_bought = v[7];
+    g->flawless = v[8] != 0;
+    g->phoenix = v[9] != 0;
+    g->total_relics_run = v[11];
+    g->total_keys_run = v[12];
+    g->chest_taken = v[13];
+    memcpy(g->perks, perks, sizeof(perks));
+    load_cavern(g, depth);
+    /* loading a cavern spends shields, so put them back exactly as saved */
+    memcpy(g->powers, powers, sizeof(powers));
+    for (int i = 0; i < PU_COUNT; i++)
+        g->power_time[i] = times[i] / 1000.0;
+    g->next_shield = v[10] != 0;
+    g->player.has_shield = shield_on != 0;
+    g->player.can_air_jump = g->perks[PERK_FEATHERSTEP] > 0;
+    *in_shop = shop != 0;
+    if (*in_shop || down) {
+        g->paused = true;
+        g->banner.active = false;
+        g->adv.depth_cleared = depth;
+        g->adv.air_bonus = 0;
+    } else {
+        set_banner(g, g->cavern.name, g->cavern.hint, 1.8);
+    }
+    if (down) {
+        g->down = true;
+        lm_audio_set_music_mode(MUSIC_NONE, 1);
+    } else if (*in_shop) {
+        lm_audio_set_music_mode(MUSIC_CAMPFIRE, 1);
+    }
+    return true;
 }

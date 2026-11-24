@@ -21,7 +21,7 @@
 
 struct app;
 static void scores_load(struct app *a);
-enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES };
+enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES, SC_CONTINUE };
 enum { IMG_TITLE, IMG_CAMP, IMG_SHOP, IMG_COUNT };
 
 #define JUMP_BUTTONS (PAD_CROSS | PAD_CIRCLE | PAD_SQUARE | PAD_TRIANGLE | PAD_R1 | PAD_L1 | PAD_R2 | PAD_L2)
@@ -61,8 +61,11 @@ struct app {
     int img_loaded;
     uint32_t spare;
 
+    /* the run in progress */
+    bool run_active, has_save, confirm_new;
+    int save_depth, save_lives, save_continues;
+
     /* title */
-    int seed_word, seed_num;
     int title_sel;
     float menu_anim[8];
     struct dust dust[80];
@@ -107,7 +110,6 @@ save_all(struct app *a)
         return;
     fprintf(f, "high_score=%d\nbest_depth=%d\ntotal_relics=%d\ntotal_caverns=%d\n", a->st.high_score, a->st.best_depth, a->st.total_relics, a->st.total_caverns);
     fprintf(f, "music=%d\nsfx=%d\nmuted=%d\nscan=%d\nbloom=%d\nrumble=%d\nshake=%d\n", a->set.music, a->set.sfx, a->set.muted, a->set.scan, a->set.bloom, a->set.rumble, a->set.shake);
-    fprintf(f, "seed_word=%d\nseed_num=%d\n", a->seed_word, a->seed_num);
     if (fclose(f) != 0)
         return;
     rename(tmp, p); /* a crash mid-write can no longer leave a half-empty save */
@@ -139,8 +141,6 @@ load_all(struct app *a)
         else if (!strcmp(line, "bloom")) a->set.bloom = v != 0;
         else if (!strcmp(line, "rumble")) a->set.rumble = v != 0;
         else if (!strcmp(line, "shake")) a->set.shake = v != 0;
-        else if (!strcmp(line, "seed_word")) a->seed_word = (int)lm_clamp(v, 0, lm_seed_word_count - 1);
-        else if (!strcmp(line, "seed_num")) a->seed_num = (int)lm_clamp(v, 100, 999);
     }
     fclose(f);
 }
@@ -164,27 +164,80 @@ go(struct app *a, int screen)
     a->scr_t0 = a->now;
 }
 
+/* ---------------------------------------------------------------- the run */
+
+/* Writes the run in progress so Continue can pick it up. */
 static void
-seed_string(struct app const *a, char *out, size_t n)
+save_run(struct app *a)
 {
-    snprintf(out, n, "%s-%d", lm_seed_words[a->seed_word], a->seed_num);
+    char p[300], tmp[310];
+    if (!a->run_active)
+        return;
+    data_path(a, "run.sav", p, sizeof(p));
+    snprintf(tmp, sizeof(tmp), "%s.tmp", p);
+    FILE *f = fopen(tmp, "w");
+    if (!f)
+        return;
+    lm_save_run(&a->g, f, a->screen == SC_SHOP || (a->screen == SC_SETTINGS && a->prev_screen == SC_SHOP));
+    if (fclose(f) != 0)
+        return;
+    rename(tmp, p);
+    a->has_save = true;
+    a->save_depth = a->g.depth;
+    a->save_lives = a->g.lives;
+    a->save_continues = a->g.continues;
 }
 
 static void
-random_seed(struct app *a)
+end_run(struct app *a)
 {
-    a->seed_word = (int)lm_floor(lm_rand(&a->g) * lm_seed_word_count);
-    a->seed_num = 100 + (int)lm_floor(lm_rand(&a->g) * 900);
+    char p[300];
+    a->run_active = false;
+    a->has_save = false;
+    remove(data_path(a, "run.sav", p, sizeof(p)));
 }
 
 static void
-start_run(struct app *a, char const *seed)
+start_run(struct app *a)
 {
+    char seed[40];
+    snprintf(seed, sizeof(seed), "RUN-%06d", (int)(lm_rand(&a->g) * 1000000)); /* decides the chests */
     lm_start_run(&a->g, seed);
     a->jump_lock = true;
     a->run_t0 = a->now;
     a->over_pending = false;
+    a->run_active = true;
     go(a, SC_PLAY);
+    save_run(a);
+}
+
+static void open_shop(struct app *a);
+
+static void
+resume_run(struct app *a)
+{
+    char p[300];
+    bool in_shop = false;
+    FILE *f = fopen(data_path(a, "run.sav", p, sizeof(p)), "r");
+    bool ok = f && lm_load_run(&a->g, f, &in_shop);
+    if (f)
+        fclose(f);
+    if (!ok) {
+        end_run(a);
+        return;
+    }
+    a->run_active = true;
+    a->jump_lock = true;
+    a->run_t0 = a->now - 100;
+    a->over_pending = false;
+    if (a->g.down) {
+        a->over_sel = 0;
+        go(a, SC_CONTINUE);
+    } else if (in_shop) {
+        open_shop(a);
+    } else {
+        go(a, SC_PLAY);
+    }
 }
 
 static void
@@ -274,7 +327,13 @@ app_create(struct app_env const *env)
     load_all(a);
     scores_load(a);
     a->hs_new = -1;
-    random_seed(a); /* a fresh cavern seed every launch, like the web version */
+    {
+        char p[300];
+        FILE *f = fopen(data_path(a, "run.sav", p, sizeof(p)), "r");
+        a->has_save = f != NULL;
+        if (f)
+            fclose(f);
+    }
     apply_settings(a);
     for (int i = 0; i < 80; i++) {
         a->dust[i] = (struct dust){(float)(lm_rand(&a->g) * 1920), (float)(lm_rand(&a->g) * 1080), (float)((lm_rand(&a->g) - 0.5) * 14),
@@ -317,6 +376,7 @@ app_wants_exit(struct app const *a)
 void
 app_shutdown(struct app *a)
 {
+    save_run(a);
     save_all(a);
 }
 
@@ -344,11 +404,14 @@ app_debug_goto(struct app *a, int screen)
 void
 app_debug_start(struct app *a, char const *seed, int depth)
 {
-    start_run(a, seed);
+    lm_start_run(&a->g, seed);
+    a->run_active = true;
+    a->over_pending = false;
+    a->jump_lock = true;
+    a->run_t0 = a->now;
+    go(a, SC_PLAY);
     if (depth > 1) {
-        a->g.depth = depth;
-        lm_generate_cavern(a->g.seed, depth, &a->g.cavern);
-        /* re-create the cavern state through the normal path: leave-shop style load */
+        /* arrive through the normal path: leave-shop style load */
         a->g.depth = depth - 1;
         lm_leave_shop(&a->g);
     }
@@ -367,12 +430,18 @@ static void
 open_shop(struct app *a)
 {
     a->shop_air_bonus = a->g.adv.air_bonus;
-    a->shop_sel = SHOP_SPRING_BOOTS;
+    a->shop_sel = SHOP_TEA_THERMOS;
     a->shop_page = 0;
-    snprintf(a->shop_line, sizeof(a->shop_line), "Pull up a stool, miner! Powers, spare lanterns and more. Regulars get a discount, so keep coming back deeper.");
+    if (a->g.flawless_award)
+        snprintf(a->shop_line, sizeof(a->shop_line), "A whole world without losing a lantern! Take this Continue, you\xe2\x80\x99ve earned it.");
+    else if (a->g.depth / SHOP_INTERVAL == 1)
+        snprintf(a->shop_line, sizeof(a->shop_line), "Pull up a stool, miner! Just the basics today. I\xe2\x80\x99ll have more in at the next stall.");
+    else
+        snprintf(a->shop_line, sizeof(a->shop_line), "Back again! New stock in since last time, and a better price for a regular.");
     a->shop_line_t = a->now;
     memset(a->shop_flash, 0, sizeof(a->shop_flash));
     go(a, SC_SHOP);
+    save_run(a);
 }
 
 static void
@@ -391,7 +460,13 @@ process_events(struct app *a)
     }
     if (ev & EV_OPEN_SHOP)
         open_shop(a);
+    if (ev & EV_CONTINUE) {
+        a->over_pending = true;
+        a->over_timer = 1.1;
+        save_run(a);
+    }
     if (ev & EV_GAME_OVER) {
+        end_run(a);
         if (g->summary.score > a->st.high_score) a->st.high_score = g->summary.score;
         if (g->summary.depth_reached > a->st.best_depth) a->st.best_depth = g->summary.depth_reached;
         save_all(a);
@@ -461,6 +536,22 @@ hintbar(struct vkr *r, int n, int const *glyphs, char const *const *labels)
 /* title-art lantern positions in the 1376x768 source image */
 static float const k_title_lanterns[7][2] = {{132, 172}, {989, 150}, {876, 202}, {1241, 168}, {463, 530}, {696, 662}, {619, 617}};
 
+enum { TM_CONTINUE, TM_NEW, TM_SCORES, TM_SETTINGS, TM_EXIT };
+
+/* The title menu depends on whether there is a run to continue. Fills the labels; returns how many. */
+static int
+title_menu(struct app const *a, char const **labels)
+{
+    int n = 0;
+    if (a->has_save)
+        labels[n++] = "Continue";
+    labels[n++] = a->confirm_new ? "Lose your save? Press again" : "New Game";
+    labels[n++] = "High Scores";
+    labels[n++] = "Settings";
+    labels[n++] = "Exit to Home";
+    return n;
+}
+
 static void
 draw_title(struct app *a, struct vkr *r, double dt)
 {
@@ -516,16 +607,17 @@ draw_title(struct app *a, struct vkr *r, double dt)
     ui_emblem(r, 116, 118 + bob, 2.3f, t);
     ui_text_shadow(r, VKR_DISPLAY, 96, 322, 128 + bob * 0.4f, HEX(0xfff1d6), "Lantern Miner");
     ui_spectrum_rule(r, 326, 262, 740, 7, 1.0f);
-    ui_text_spaced(r, VKR_SANS, 27, 326, 286, 7.2f, HEX(0xd4c7b7), "ENDLESS COSY CAVERNS");
+    ui_text_spaced(r, VKR_SANS, 27, 326, 286, 7.2f, HEX(0xd4c7b7), "A COSY CAVERN ADVENTURE");
 
     ui_paragraph(r, VKR_SANS, 27, 120, 372, 800, 40, HEX(0xe6dccb),
-                 "Explore endless lantern-lit caverns inspired by the 1983 ZX Spectrum classic. Gather flashing keys, outmanoeuvre "
-                 "fiercer guardians each depth, and save Relic Points for Old Barnaby\xe2\x80\x99s Shop every 5 caverns, where powers, lives and gear are sold.");
+                 "Journey through lantern-lit caverns inspired by the 1983 ZX Spectrum classic. Gather flashing keys, dodge "
+                 "the guardians, and save Relic Points for Old Barnaby\xe2\x80\x99s Shop, which has something new every time you reach it.");
 
     /* menu */
-    static char const *const labels[5] = {"Enter the Mine", "Seed", "High Scores", "Settings", "Exit to Home"};
+    char const *labels[5];
+    int count = title_menu(a, labels);
     float mx = 120, my = 566, mw = 560, mh = 64, gap = 10;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < count; i++) {
         float y = my + i * (mh + gap);
         ui_button(r, mx, y, mw, mh, labels[i], sel == i, i == 0, a->menu_anim[i], t);
         if (i == 0) {
@@ -535,24 +627,11 @@ draw_title(struct app *a, struct vkr *r, double dt)
             else
                 vkr_tri(r, ax, y + mh / 2 - 12, ax, y + mh / 2 + 12, ax + 22, y + mh / 2, HEXA(C_AMBER, 0.8));
         }
-        if (i == 1) {
-            char s[40];
-            seed_string(a, s, sizeof(s));
-            float x = mx + a->menu_anim[i] * 14;
-            uint32_t ink = sel == 1 ? HEX(C_INK) : HEX(C_CREAM);
-            float vw = ui_text_w(r, VKR_MONO_BOLD, 34, s);
-            float vx = x + mw - 70 - vw;
-            ui_text(r, VKR_MONO_BOLD, 34, vx, y + mh / 2 - 20, ink, s);
-            float k = sel == 1 ? 1.0f + 0.15f * (float)lm_sin(t * 8.0) : 0.0f;
-            uint32_t ac = sel == 1 ? HEX(C_INK) : HEXA(C_MUTED, 0.7);
-            vkr_tri(r, vx - 22 - k * 3, y + mh / 2, vx - 8 - k * 3, y + mh / 2 - 11, vx - 8 - k * 3, y + mh / 2 + 11, ac);
-            vkr_tri(r, x + mw - 44 + k * 3, y + mh / 2, x + mw - 58 + k * 3, y + mh / 2 - 11, x + mw - 58 + k * 3, y + mh / 2 + 11, ac);
-        }
     }
 
     /* personal bests, unboxed */
     {
-        float x = 120, y = my + 5 * (mh + gap) + 2;
+        float x = 120, y = my + count * (mh + gap) + 2;
         char b[64];
         if (a->st.best_depth > 0 || a->st.high_score > 0) {
             snprintf(b, sizeof(b), "Best Depth ");
@@ -580,10 +659,10 @@ draw_title(struct app *a, struct vkr *r, double dt)
     }
 
     {
-        static int const gl[4] = {G_CROSS, G_DPAD, G_L1, G_TRIANGLE};
-        static char const *const lb[4] = {"Select", "Move / Adjust", "Seed word", "Random seed"};
+        static int const gl[2] = {G_CROSS, G_DPAD_UD};
+        static char const *const lb[2] = {"Select", "Move"};
         draw_version(r, 0.7f);
-        hintbar(r, 4, gl, lb);
+        hintbar(r, 2, gl, lb);
     }
 }
 
@@ -605,7 +684,8 @@ draw_hud(struct app *a, struct vkr *r)
     lx += 30;
     ui_text(r, VKR_DISPLAY_SEMI, 34, lx, 8, HEX(C_CREAM), g->cavern.name);
     lx += ui_text_w(r, VKR_DISPLAY_SEMI, 34, g->cavern.name) + 22;
-    ui_text(r, VKR_SANS, 22, lx, 17, HEX(C_DIM), bio->label);
+    snprintf(b, sizeof(b), "World %d \xc2\xb7 %s", lm_world_of(g->depth), bio->label);
+    ui_text(r, VKR_SANS, 22, lx, 17, HEX(C_DIM), b);
 
     float rx = 1868;
     lm_fmt_int(b, sizeof(b), g->score);
@@ -658,6 +738,10 @@ draw_hud(struct app *a, struct vkr *r)
     snprintf(b, sizeof(b), "Lives x%d", g->lives);
     ui_text_r(r, VKR_MONO_BOLD, 26, rx - 12, 14, g->lives <= 1 ? HEX(C_PINK) : HEX(C_CREAM), b);
     rx -= ui_text_w(r, VKR_MONO_BOLD, 26, b) + 40;
+    if (g->continues > 0) {
+        snprintf(b, sizeof(b), "Continues x%d", g->continues);
+        ui_text_r(r, VKR_MONO_BOLD, 22, 1868, 50, HEX(C_GREEN), b);
+    }
 
     /* bottom band: Lantern Air + run meta */
     vkr_rect_grad(r, 0, 1004, VKR_W, 76, HEXA(0x08060c, 0.0), HEXA(0x08060c, 0.85));
@@ -681,8 +765,6 @@ draw_hud(struct app *a, struct vkr *r)
     }
     {
         float x = 1868;
-        ui_text_r(r, VKR_MONO, 22, x, 1034, HEX(C_DIM), g->seed);
-        x -= ui_text_w(r, VKR_MONO, 22, g->seed) + 26;
         int until = lm_cavern_until_shop(g);
         if (until == 0) {
             ui_text_r(r, VKR_MONO_BOLD, 24, x, 1031, HEX(C_GREEN), "Shop After Portal");
@@ -745,19 +827,18 @@ draw_pause(struct app *a, struct vkr *r)
     struct lm_game const *g = &a->g;
     char b[96];
     draw_dim(r, 0.66f);
-    float pw = 760, ph = 780, px = (VKR_W - pw) / 2, py = 150;
+    float pw = 760, ph = 690, px = (VKR_W - pw) / 2, py = 180;
     ui_panel(r, px, py, pw, ph, 28, 0.94f);
     snprintf(b, sizeof(b), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
     ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(C_AMBER), b);
     ui_text_c(r, VKR_DISPLAY, 76, 960, py + 80, HEX(C_CREAM), "Lantern Paused");
     ui_spectrum_rule(r, px + 160, py + 184, pw - 320, 5, 0.9f);
-    snprintf(b, sizeof(b), "Seed  %s", g->seed);
-    ui_text_c(r, VKR_MONO, 24, 960, py + 206, HEX(C_MUTED), b);
+    ui_text_c(r, VKR_MONO, 24, 960, py + 206, HEX(C_MUTED), "Your progress is saved after every cavern");
 
-    static char const *const labels[5] = {"Resume Expedition", "Restart Run", "Settings", "Sound: On", "Quit to Title"};
-    for (int i = 0; i < 5; i++) {
+    static char const *const labels[4] = {"Resume Expedition", "Settings", "Sound: On", "Save & Quit to Title"};
+    for (int i = 0; i < 4; i++) {
         char lab[48];
-        snprintf(lab, sizeof(lab), "%s", i == 3 ? (a->set.muted ? "Sound: Off" : "Sound: On") : labels[i]);
+        snprintf(lab, sizeof(lab), "%s", i == 2 ? (a->set.muted ? "Sound: Off" : "Sound: On") : labels[i]);
         ui_button(r, px + 70, py + 270 + i * 88, pw - 140, 72, lab, a->pause_sel == i, i == 0, a->row_anim[i], a->now);
     }
     static int const gl[4] = {G_DPAD_UD, G_CROSS, G_CIRCLE, G_R3};
@@ -788,7 +869,7 @@ shop_rows(int page)
 static int
 shop_rowlen(int page, int row)
 {
-    return page == 2 ? 2 : 3;
+    return 3;
 }
 
 /* item at a grid position; the column is clamped to the length of that row */
@@ -863,7 +944,7 @@ draw_shop(struct app *a, struct vkr *r)
         part[n] = 0;
         ui_paragraph(r, VKR_SANS, 27, px, py + ph + 72, pw, 38, HEX(0xe6dccb), part);
     }
-    snprintf(b, sizeof(b), "Unspent Relic Points stay in your satchel until the next stall at Cavern %d.", g->depth + SHOP_INTERVAL);
+    snprintf(b, sizeof(b), "Unspent Relic Points stay in your satchel for the next stall.");
     ui_paragraph(r, VKR_SANS, 21, px, 886, pw, 28, HEX(C_DIM), b);
 
     /* right: shelves (page 0 = Lantern Powers, page 1 = supplies and gear) */
@@ -875,7 +956,7 @@ draw_shop(struct app *a, struct vkr *r)
         ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Spring, Magnet and Slow are timed: buy again to stack x2 / x3");
     } else if (a->shop_page == 2) {
         ui_text(r, VKR_DISPLAY_SEMI, 34, gx, 128, HEX(C_CREAM), "Special Wares");
-        ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Rare stock that only appears at the deeper stalls");
+        ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Rare stock, and the only way to buy a Continue");
     } else {
         for (int tier = 0; tier < 3; tier++) {
             float sy = 128 + tier * 272;
@@ -952,10 +1033,12 @@ draw_over(struct app *a, struct vkr *r)
 
     float pw = 1120, ph = 700, px = (VKR_W - pw) / 2, py = 150;
     ui_panel(r, px, py, pw, ph, 30, 0.94f);
-    ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(C_PINK), s->air ? "Lantern Flame Faded" : "Time for Tea & Rest");
-    ui_text_c(r, VKR_DISPLAY, 88, 960, py + 74, HEX(C_CREAM), "Expedition Complete");
+    ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(s->won ? C_GREEN : C_PINK),
+              s->won ? "Expedition Complete" : s->air ? "Lantern Flame Faded" : "Time for Tea & Rest");
+    ui_text_c(r, VKR_DISPLAY, 88, 960, py + 74, HEX(C_CREAM), s->won ? "To Be Continued" : "Game Over");
     ui_text_c(r, VKR_SANS, 27, 960, py + 188, HEX(C_MUTED),
-              s->new_high_score ? "New personal best score etched into the mine log." : "Every cavern brings a fresh layout and new treasures.");
+              s->won ? "You have cleared every cavern built so far. More worlds are on the way."
+                     : s->new_high_score ? "New personal best score etched into the mine log." : "Dust yourself off, miner. The caverns are waiting.");
 
     vkr_rect(r, px + 60, py + 250, pw - 120, 1.5f, HEXA(C_CREAM, 0.1));
     vkr_rect(r, px + 60, py + 420, pw - 120, 1.5f, HEXA(C_CREAM, 0.1));
@@ -975,19 +1058,45 @@ draw_over(struct app *a, struct vkr *r)
     {
         char hs[32];
         lm_fmt_int(hs, sizeof(hs), s->high_score);
-        snprintf(b, sizeof(b), "Best Score %s   \xc2\xb7   Seed %s", hs, s->seed);
+        snprintf(b, sizeof(b), "Best Score %s", hs);
         ui_text_c(r, VKR_MONO, 24, 960, py + 446, HEX(C_MUTED), b);
         if (s->new_best_depth)
             ui_text_c(r, VKR_MONO_BOLD, 24, 960, py + 482, HEXA(C_GREEN, 0.8 + 0.2 * lm_sin(t * 5)), "New deepest cavern!");
     }
-    static char const *const bl[3] = {"Play Again", "Retry Seed", "Title Screen"};
-    float bw = 320, bh = 76, gap = 28, bx0 = px + (pw - (3 * bw + 2 * gap)) / 2;
-    for (int i = 0; i < 3; i++)
+    static char const *const bl[2] = {"New Game", "Title Screen"};
+    float bw = 360, bh = 76, gap = 40, bx0 = px + (pw - (2 * bw + gap)) / 2;
+    for (int i = 0; i < 2; i++)
         ui_button_c(r, bx0 + i * (bw + gap), py + 560, bw, bh, bl[i], a->over_sel == i, i == 0, a->row_anim[i] * 0.5f, t);
 
     static int const gl[3] = {G_DPAD_LR, G_CROSS, G_CIRCLE};
     static char const *const lb[3] = {"Choose", "Confirm", "Title"};
     hintbar(r, 3, gl, lb);
+}
+
+static void
+draw_continue(struct app *a, struct vkr *r)
+{
+    struct lm_game const *g = &a->g;
+    char b[128];
+    double t = a->now;
+    draw_cover(a, r, IMG_CAMP, HEX(0x9a9aa6));
+    vkr_rect(r, 0, 0, VKR_W, VKR_H, HEXA(0x0a080d, 0.62));
+    float pw = 1000, ph = 560, px = (VKR_W - pw) / 2, py = 230;
+    ui_panel(r, px, py, pw, ph, 30, 0.94f);
+    ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(C_PINK), "Out of Lives");
+    ui_text_c(r, VKR_DISPLAY, 80, 960, py + 80, HEX(C_CREAM), "Carry On?");
+    snprintf(b, sizeof(b), "A Continue takes you back to the start of World %d with %d lives.", lm_world_of(g->depth), START_LIVES);
+    ui_text_c(r, VKR_SANS, 28, 960, py + 200, HEX(C_MUTED), b);
+    ui_text_c(r, VKR_SANS, 24, 960, py + 246, HEX(C_DIM), "You keep your upgrades and Relic Points. Score returns to what it was when you arrived.");
+    snprintf(b, sizeof(b), "Continues held: %d", g->continues);
+    ui_text_c(r, VKR_MONO_BOLD, 30, 960, py + 310, HEX(C_GREEN), b);
+    static char const *const bl[2] = {"Use a Continue", "Give Up"};
+    float bw = 360, bh = 76, gap = 40, bx0 = px + (pw - (2 * bw + gap)) / 2;
+    for (int i = 0; i < 2; i++)
+        ui_button_c(r, bx0 + i * (bw + gap), py + 410, bw, bh, bl[i], a->over_sel == i, i == 0, a->row_anim[i] * 0.5f, t);
+    static int const gl[2] = {G_DPAD_LR, G_CROSS};
+    static char const *const lb[2] = {"Choose", "Confirm"};
+    hintbar(r, 2, gl, lb);
 }
 
 enum { SET_MUSIC, SET_SFX, SET_MUTE, SET_SCAN, SET_BLOOM, SET_RUMBLE, SET_SHAKE, SET_BACK, SET_COUNT };
@@ -1096,50 +1205,61 @@ static void
 update_title(struct app *a, struct app_input const *in)
 {
     uint32_t p = in->pressed;
-    nav(a, in, &a->title_sel, 5);
-    if (a->title_sel == 1) {
-        if (p & PAD_LEFT) { a->seed_num = a->seed_num <= 100 ? 999 : a->seed_num - 1; lm_audio_ui_move(); }
-        if (p & PAD_RIGHT) { a->seed_num = a->seed_num >= 999 ? 100 : a->seed_num + 1; lm_audio_ui_move(); }
-    }
-    if (p & PAD_L1) { a->seed_word = (a->seed_word + lm_seed_word_count - 1) % lm_seed_word_count; lm_audio_ui_move(); }
-    if (p & PAD_R1) { a->seed_word = (a->seed_word + 1) % lm_seed_word_count; lm_audio_ui_move(); }
-    if (p & PAD_TRIANGLE) { random_seed(a); lm_audio_ui_select(); }
-    if (p & PAD_CROSS) {
-        char s[40];
-        switch (a->title_sel) {
-        case 0:
-            lm_audio_ui_select();
-            seed_string(a, s, sizeof(s));
+    char const *labels[5];
+    int count = title_menu(a, labels);
+    if (a->title_sel >= count)
+        a->title_sel = 0;
+    if (nav(a, in, &a->title_sel, count) || (p & PAD_CIRCLE))
+        a->confirm_new = false;
+    if (!(p & PAD_CROSS))
+        return;
+    switch (a->title_sel + (a->has_save ? 0 : 1)) {
+    case TM_CONTINUE:
+        lm_audio_ui_select();
+        resume_run(a);
+        break;
+    case TM_NEW:
+        lm_audio_ui_select();
+        if (a->has_save && !a->confirm_new) {
+            a->confirm_new = true; /* a second press, so a save is not lost by accident */
+        } else {
+            a->confirm_new = false;
             save_all(a);
-            start_run(a, s);
-            break;
-        case 1:
-            random_seed(a);
-            lm_audio_ui_select();
-            break;
-        case 2:
-            lm_audio_ui_select();
-            a->hs_new = -1;
-            a->hs_from_over = false;
-            go(a, SC_SCORES);
-            break;
-        case 3:
-            lm_audio_ui_select();
-            go(a, SC_SETTINGS);
-            break;
-        default:
-            save_all(a);
-            a->exit_req = true;
-            break;
+            start_run(a);
         }
+        break;
+    case TM_SCORES:
+        lm_audio_ui_select();
+        a->hs_new = -1;
+        a->hs_from_over = false;
+        go(a, SC_SCORES);
+        break;
+    case TM_SETTINGS:
+        lm_audio_ui_select();
+        go(a, SC_SETTINGS);
+        break;
+    default:
+        save_all(a);
+        a->exit_req = true;
+        break;
     }
+}
+
+static void
+to_title(struct app *a)
+{
+    a->g.running = false;
+    a->title_sel = 0;
+    a->confirm_new = false;
+    lm_audio_set_music_mode(MUSIC_TITLE, 1.0);
+    go(a, SC_TITLE);
 }
 
 static void
 update_pause(struct app *a, struct app_input const *in)
 {
     uint32_t p = in->pressed;
-    nav(a, in, &a->pause_sel, 5);
+    nav(a, in, &a->pause_sel, 4);
     if (p & PAD_R3)
         toggle_mute(a);
     if ((p & (PAD_OPTIONS | PAD_CIRCLE)) || ((p & PAD_CROSS) && a->pause_sel == 0)) {
@@ -1151,23 +1271,17 @@ update_pause(struct app *a, struct app_input const *in)
     }
     if (p & PAD_CROSS) {
         lm_audio_ui_select();
-        char s[40];
         switch (a->pause_sel) {
         case 1:
-            snprintf(s, sizeof(s), "%s", a->g.seed);
-            start_run(a, s);
-            break;
-        case 2:
             go(a, SC_SETTINGS);
             break;
-        case 3:
+        case 2:
             toggle_mute(a);
             break;
-        case 4:
+        case 3:
             lm_set_paused(&a->g, true);
-            a->g.running = false;
-            lm_audio_set_music_mode(MUSIC_TITLE, 1.0);
-            go(a, SC_TITLE);
+            save_run(a);
+            to_title(a);
             break;
         default:
             break;
@@ -1219,6 +1333,7 @@ update_shop(struct app *a, struct app_input const *in)
             a->jump_lock = true;
             a->run_t0 = a->now - 100;
             go(a, SC_PLAY);
+            save_run(a);
             return;
         }
         struct lm_shop_status st;
@@ -1226,7 +1341,9 @@ update_shop(struct app *a, struct app_input const *in)
         if (st.can_buy && lm_shop_purchase(&a->g, a->shop_sel)) {
             struct lm_shop_def const *it = &lm_shop[a->shop_sel];
             a->shop_flash[a->shop_sel] = 1.0;
-            if (it->tier == TIER_SPECIAL)
+            if (a->shop_sel == SHOP_CONTINUE)
+                snprintf(a->shop_line, sizeof(a->shop_line), "A Continue Lantern. Costly, I know. Pray you never need it!");
+            else if (it->tier == TIER_SPECIAL)
                 snprintf(a->shop_line, sizeof(a->shop_line), "Ha! The %s! I keep those for my best customers. Don\xe2\x80\x99t waste it!", it->name);
             else if (a->shop_sel == SHOP_EXTRA_LIFE)
                 snprintf(a->shop_line, sizeof(a->shop_line), "A spare lantern! That\xe2\x80\x99s %d lives now. Try to use fewer of them.", a->g.lives);
@@ -1240,6 +1357,7 @@ update_shop(struct app *a, struct app_input const *in)
                 snprintf(a->shop_line, sizeof(a->shop_line), "Here\xe2\x80\x99s your %s, fresh off the counter. Keep your lantern trimmed down below!", it->name);
             a->shop_line_t = a->now;
             save_all(a);
+            save_run(a);
         } else {
             lm_audio_ui_back();
         }
@@ -1250,30 +1368,46 @@ static void
 update_over(struct app *a, struct app_input const *in)
 {
     uint32_t p = in->pressed;
-    if (p & PAD_LEFT) { a->over_sel = (a->over_sel + 2) % 3; lm_audio_ui_move(); }
-    if (p & PAD_RIGHT) { a->over_sel = (a->over_sel + 1) % 3; lm_audio_ui_move(); }
+    if (p & (PAD_LEFT | PAD_RIGHT)) { a->over_sel = !a->over_sel; lm_audio_ui_move(); }
     if (p & PAD_CIRCLE) {
         lm_audio_ui_back();
-        a->g.running = false;
-        lm_audio_set_music_mode(MUSIC_TITLE, 1.0);
-        go(a, SC_TITLE);
+        to_title(a);
         return;
     }
     if (p & PAD_CROSS) {
         lm_audio_ui_select();
-        char s[40];
-        if (a->over_sel == 0) {
-            random_seed(a);
-            seed_string(a, s, sizeof(s));
-            start_run(a, s);
-        } else if (a->over_sel == 1) {
-            snprintf(s, sizeof(s), "%s", a->g.summary.seed);
-            start_run(a, s);
-        } else {
-            a->g.running = false;
-            lm_audio_set_music_mode(MUSIC_TITLE, 1.0);
-            go(a, SC_TITLE);
-        }
+        if (a->over_sel == 0)
+            start_run(a);
+        else
+            to_title(a);
+    }
+}
+
+static void
+update_continue(struct app *a, struct app_input const *in)
+{
+    uint32_t p = in->pressed;
+    if (a->now - a->scr_t0 < 0.7) /* mashing on the way down must not spend a Continue */
+        return;
+    if (p & (PAD_LEFT | PAD_RIGHT)) { a->over_sel = !a->over_sel; lm_audio_ui_move(); }
+    if (!(p & PAD_CROSS))
+        return;
+    lm_audio_ui_select();
+    if (a->over_sel == 0) {
+        lm_use_continue(&a->g);
+        a->jump_lock = true;
+        a->run_t0 = a->now - 100;
+        go(a, SC_PLAY);
+        save_run(a);
+    } else {
+        lm_give_up(&a->g);
+        end_run(a);
+        if (a->g.summary.score > a->st.high_score) a->st.high_score = a->g.summary.score;
+        if (a->g.summary.depth_reached > a->st.best_depth) a->st.best_depth = a->g.summary.depth_reached;
+        save_all(a);
+        a->g.events = 0;
+        a->over_sel = 0;
+        finish_run(a);
     }
 }
 
@@ -1349,6 +1483,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     case SC_OVER:
         update_over(a, in);
         break;
+    case SC_CONTINUE:
+        update_continue(a, in);
+        break;
     case SC_SETTINGS:
         update_settings(a, in);
         break;
@@ -1381,12 +1518,18 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     }
     if (a->screen == SC_PLAY) {
         process_events(a);
+        if (a->screen == SC_PLAY && a->run_active && !a->over_pending &&
+            (a->g.depth != a->save_depth || a->g.lives != a->save_lives || a->g.continues != a->save_continues))
+            save_run(a); /* a new cavern, a lost life or a found Continue */
         if (a->over_pending) {
             a->over_timer -= dt;
             if (a->over_timer <= 0) {
                 a->over_pending = false;
                 a->over_sel = 0;
-                finish_run(a);
+                if (a->g.down)
+                    go(a, SC_CONTINUE);
+                else
+                    finish_run(a);
             }
         }
     }
@@ -1396,8 +1539,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     /* row highlight animation per screen */
     switch (a->screen) {
     case SC_TITLE: anim_rows(a, a->menu_anim, 5, a->title_sel, dt); break;
-    case SC_PAUSE: anim_rows(a, a->row_anim, 5, a->pause_sel, dt); break;
-    case SC_OVER: anim_rows(a, a->row_anim, 3, a->over_sel, dt); break;
+    case SC_PAUSE: anim_rows(a, a->row_anim, 4, a->pause_sel, dt); break;
+    case SC_OVER:
+    case SC_CONTINUE: anim_rows(a, a->row_anim, 2, a->over_sel, dt); break;
     case SC_SETTINGS: anim_rows(a, a->row_anim, SET_COUNT, a->set_sel, dt); break;
     default: break;
     }
@@ -1429,6 +1573,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         break;
     case SC_OVER:
         draw_over(a, r);
+        break;
+    case SC_CONTINUE:
+        draw_continue(a, r);
         break;
     case SC_NAME:
         draw_name(a, r);

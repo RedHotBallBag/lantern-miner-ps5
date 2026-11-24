@@ -71,6 +71,7 @@ restore(struct snap const *s)
     g.pending_advance = g.respawn_timer = 0;
     g.events = 0;
     g.lives = 5;
+    g.down = false;
     g.n_particles = g.n_floats = 0;
 }
 
@@ -243,7 +244,7 @@ main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     for (int i = first; i <= last; i++) {
         /* the depth it first turns up at, and a deep lap (faster platforms, quicker crumbling) */
-        int depths[2] = {i + 1, 45};
+        int depths[2] = {i + 1, 50}; /* its place in the campaign, and a late-game speed */
         for (int d = 0; d < 2; d++)
             for (int m = 0; m < 2; m++, total++)
                 if (!solve(i, m, depths[d]))

@@ -1,7 +1,6 @@
 /*
-** Lantern Miner: cavern builder. Twenty hand-designed maps (lm_levels.inc) are dealt out in order of difficulty; the
-** seed picks the order within each tier, whether a map is mirrored, and where luck puts a chest. The same seed always
-** gives the same run.
+** Lantern Miner: cavern builder. The campaign is a fixed list of hand-designed maps (lm_levels.inc). The only thing
+** that differs between runs is luck: whether a cavern's chest turns up and what is in it (from the run's seed).
 */
 #include "lm.h"
 
@@ -62,47 +61,13 @@ rng_chance(struct rng *r, double p)
 
 enum { OP_FILL, OP_LADDER, OP_MOVER, OP_START, OP_EXIT, OP_KEY, OP_GEM, OP_CHEST, OP_FOE };
 struct op { uint8_t kind, arg, c0, r0, c1, r1; };
-struct level { char const *name, *hint; struct op const *ops; int n; };
+struct level { char const *name, *hint; int biome; struct op const *ops; int n; };
 
 #include "lm_levels.inc"
 
 #define N_LEVELS ((int)(sizeof(k_levels) / sizeof(k_levels[0])))
-#define PER_TIER 5
 
 int lm_level_count(void) { return N_LEVELS; }
-
-/* Which map is cavern `depth` of this seed. Depths 1..20 walk the tiers in order; after that the fifteen harder maps
-   are reshuffled for each lap. */
-static int
-pick_level(char const *seed, int depth)
-{
-    int deck[N_LEVELS], n = 0, at;
-    char key[160];
-    struct rng r;
-    if (depth <= 1)
-        return 0;
-    if (depth <= N_LEVELS) {
-        int tier = (depth - 1) / PER_TIER;
-        int first = tier == 0 ? 1 : tier * PER_TIER;
-        for (int i = first; i < (tier + 1) * PER_TIER; i++)
-            deck[n++] = i;
-        at = depth - 1 - first;
-        snprintf(key, sizeof(key), "%s::tier::%d", seed, tier);
-    } else {
-        for (int i = PER_TIER; i < N_LEVELS; i++)
-            deck[n++] = i;
-        at = (depth - N_LEVELS - 1) % n;
-        snprintf(key, sizeof(key), "%s::lap::%d", seed, (depth - N_LEVELS - 1) / n);
-    }
-    rng_seed(&r, key);
-    for (int i = n - 1; i > 0; i--) {
-        int j = rng_pick(&r, i + 1);
-        int t = deck[i];
-        deck[i] = deck[j];
-        deck[j] = t;
-    }
-    return deck[at];
-}
 
 /* ------------------------------------------------------------------- foes */
 
@@ -214,10 +179,10 @@ add_collect(struct lm_cavern *cv, int kind, int powerup, int variant, double x, 
 static int
 roll_chest(struct rng *rng)
 {
-    /* weights out of 100: shield 20, tea 22, spring 15, magnet 13, slow 12, jackpot 12, a spare life 6 */
+    /* weights out of 100: shield 20, tea 22, spring 15, magnet 13, slow 12, jackpot 10, a spare life 6, a continue 2 */
     static int const weight[CHEST_KINDS] = {
         [PU_SPRING_BOOTS] = 15, [PU_LANTERN_SHIELD] = 20, [PU_TEA_THERMOS] = 22, [PU_STARLIGHT_MAGNET] = 13,
-        [PU_CLOCKWORK_SLOW] = 12, [CHEST_JACKPOT] = 12, [CHEST_LIFE] = 6};
+        [PU_CLOCKWORK_SLOW] = 12, [CHEST_JACKPOT] = 10, [CHEST_LIFE] = 6, [CHEST_CONTINUE] = 2};
     int n = rng_pick(rng, 100);
     for (int i = 0; i < CHEST_KINDS; i++) {
         n -= weight[i];
@@ -231,20 +196,19 @@ void
 lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_cavern *cv)
 {
     struct level const *lv = &k_levels[index];
-    struct rng rng;
+    struct rng rng, luck;
     char key[160];
     int foes = 0, gems = 0;
     /* the foe budget is the difficulty curve: one in the first cavern, about ten by cavern seventeen */
     int budget = (int)lm_min(12, 1 + lm_floor((depth - 1) * 0.55));
 
-    snprintf(key, sizeof(key), "%s::cavern::%d", seed, depth);
+    snprintf(key, sizeof(key), "cavern::%d::%d", index, depth); /* the same for every run */
     rng_seed(&rng, key);
+    snprintf(key, sizeof(key), "%s::chest::%d", seed, depth);
+    rng_seed(&luck, key);
     memset(cv, 0, sizeof(*cv));
     cv->depth = depth;
-    {
-        static int const order[5] = {BIOME_TIMBER_HEARTH, BIOME_GLOW_MOSS, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_FROST_LANTERN};
-        cv->biome = order[(depth - 1) % 5];
-    }
+    cv->biome = lv->biome;
     snprintf(cv->name, sizeof(cv->name), "%s", lv->name);
     snprintf(cv->hint, sizeof(cv->hint), "%s", lv->hint);
 
@@ -319,10 +283,10 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
             #ifdef LM_ALL_CHESTS
             if (true) {
 #else
-            if (depth >= 2 && rng_chance(&rng, 0.35)) {
+            if (depth >= 2 && rng_chance(&luck, 0.35)) {
 #endif
-                int prize = roll_chest(&rng);
-                add_collect(cv, COL_CHEST, prize, 0, x, y + TILE_SIZE * 0.6, rng_next(&rng) * LM_PI * 2);
+                int prize = roll_chest(&luck);
+                add_collect(cv, COL_CHEST, prize, 0, x, y + TILE_SIZE * 0.6, rng_next(&luck) * LM_PI * 2);
             }
             break;
         case OP_FOE:
@@ -354,9 +318,6 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
 void
 lm_generate_cavern(char const *seed, int depth, struct lm_cavern *out)
 {
-    char key[160];
-    struct rng r;
-    snprintf(key, sizeof(key), "%s::mirror::%d", seed, depth);
-    rng_seed(&r, key);
-    lm_build_level(pick_level(seed, depth), depth > 1 && rng_chance(&r, 0.5), seed, depth, out);
+    int i = depth < 1 ? 0 : depth > N_LEVELS ? N_LEVELS - 1 : depth - 1;
+    lm_build_level(i, false, seed, depth, out);
 }

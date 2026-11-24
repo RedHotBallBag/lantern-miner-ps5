@@ -116,9 +116,7 @@ main(int argc, char **argv)
 
     /* title */
     frames(200, 0, 0, "01_title.png"); /* past the loading splash */
-    frames(2, PAD_DOWN, 0, NULL);
-    frames(40, 0, 0, "02_title_seed.png");
-    frames(2, PAD_DOWN, 0, NULL);
+    frames(2, PAD_DOWN, 0, NULL); /* no save yet: New Game, High Scores, Settings, Exit */
     frames(2, PAD_CROSS, 0, NULL);
     frames(40, 0, 0, "03_high_scores.png");
     frames(2, PAD_CIRCLE, 0, NULL);
@@ -150,7 +148,6 @@ main(int argc, char **argv)
     frames(2, PAD_OPTIONS, 0, NULL);
     frames(30, 0, 0, "06_pause.png");
     frames(2, PAD_DOWN, 0, NULL);
-    frames(2, PAD_DOWN, 0, NULL);
     frames(2, PAD_CROSS, 0, NULL);
     frames(30, 0, 0, "07_settings_pause.png");
     frames(2, PAD_CIRCLE, 0, NULL);
@@ -169,8 +166,8 @@ main(int argc, char **argv)
         frames(2, 0, 0, name);
     }
 
-    /* every built cavern in the order this seed deals them */
-    for (int d = 1; d <= 20; d++) {
+    /* the whole campaign, in order */
+    for (int d = 1; d <= lm_level_count(); d++) {
         char name[64];
         app_debug_start(g.app, "KETTLE-417", d);
         game()->player.invuln = 3600;
@@ -182,6 +179,7 @@ main(int argc, char **argv)
     }
     /* clear cavern 10 -> Old Barnaby's shop */
     app_debug_start(g.app, "WILLY-222", 10);
+    game()->flawless = false;
     {
         struct lm_game *gm = game();
         gm->relic_points = 3000;
@@ -217,7 +215,33 @@ main(int argc, char **argv)
     frames(30, 0, 0, NULL);
     fprintf(stderr, "[test] thermos: air=%.1f thermos left=%d running=%d\n", game()->air, game()->powers[PU_TEA_THERMOS], app_debug_screen(g.app));
     frames(40, 0, 0, "12c_thermos.png");
+    /* save, quit to the title and Continue: the run must come back as it was */
+    {
+        struct lm_game *gm = game();
+        int depth = gm->depth, score = gm->score, lives = gm->lives, pts = gm->relic_points;
+        frames(2, PAD_OPTIONS, 0, NULL);
+        for (int i = 0; i < 3; i++)
+            frames(2, PAD_DOWN, 0, NULL);
+        frames(2, PAD_CROSS, 0, NULL);
+        frames(40, 0, 0, "15_title_continue.png");
+        gm->depth = 1;
+        gm->score = gm->lives = gm->relic_points = 0;
+        frames(2, PAD_CROSS, 0, NULL);
+        frames(40, 0, 0, NULL);
+        fprintf(stderr, "[test] resume: depth %d/%d score %d/%d lives %d/%d points %d/%d screen %d\n", gm->depth, depth,
+                gm->score, score, gm->lives, lives, gm->relic_points, pts, app_debug_screen(g.app));
+    }
+    /* out of lives with a Continue in hand: back to the start of the world */
+    game()->lives = 1;
+    game()->continues = 1;
+    game()->air = 0.02;
+    frames(150, 0, 0, "16_continue.png");
+    fprintf(stderr, "[test] continue screen: %d (8 = continue)\n", app_debug_screen(g.app));
+    frames(2, PAD_CROSS, 0, NULL);
+    frames(100, 0, 0, NULL);
+    fprintf(stderr, "[test] after continue: cavern %d lives %d continues %d\n", game()->depth, game()->lives, game()->continues);
     /* run out of air on the last life: game over */
+    game()->score = 12340;
     game()->lives = 1;
     game()->air = 0.02;
     frames(120, 0, 0, NULL);
@@ -233,6 +257,35 @@ main(int argc, char **argv)
     frames(40, 0, 0, "13_game_over.png");
     frames(2, PAD_RIGHT, 0, NULL);
     frames(30, 0, 0, "14_game_over_sel.png");
+
+    /* giving up a Continue ends the run; the last portal is a win */
+    app_debug_start(g.app, "END", 3);
+    game()->lives = 1;
+    game()->continues = 1;
+    game()->air = 0.02;
+    frames(150, 0, 0, NULL);
+    frames(2, PAD_RIGHT, 0, NULL);
+    frames(2, PAD_CROSS, 0, NULL);
+    frames(40, 0, 0, NULL);
+    fprintf(stderr, "[test] gave up: screen %d running-down %d\n", app_debug_screen(g.app), game()->down);
+    app_debug_start(g.app, "END", lm_level_count());
+    {
+        struct lm_game *gm = game();
+        gm->score = 99999;
+        gm->banner.active = false;
+        gm->keys_collected = gm->cavern.keys_total;
+        gm->portal_unlocked = true;
+        gm->player.invuln = 3600;
+        gm->player.x = gm->cavern.portal.x + 20;
+        gm->player.y = gm->cavern.portal.y + 30;
+        gm->player.vy = 0;
+    }
+    frames(150, 0, 0, NULL);
+    fprintf(stderr, "[test] final portal: screen %d won %d\n", app_debug_screen(g.app), game()->summary.won);
+    frames(2, PAD_OPTIONS, 0, NULL);
+    frames(40, 0, 0, NULL);
+    frames(2, PAD_CROSS, 0, NULL);
+    frames(40, 0, 0, "17_the_end.png");
 
     g_audio_run = 0;
     pthread_join(audio, NULL);

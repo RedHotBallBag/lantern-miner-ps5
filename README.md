@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cosy cavern platformer for jailbroken PS5 · <b>Beta v0.5</b> · <code>PPSA58001</code></p>
+<p align="center">A cosy cavern platformer for jailbroken PS5 · <b>Beta v0.7</b> · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
@@ -14,15 +14,19 @@ hard but fair feel, with a warmer look and a few extras. It's written in C with 
 
 Grab all the keys, get to the portal and head down to the next cavern. Watch your air, and watch out for the guardians.
 
+- 23 hand-built caverns so far, heading for 50 across 5 worlds
+- World 1 is finished, with ten caverns from gentle to tricky
+- Ladders, lifts, moving platforms, conveyors, crumbling ledges and deep water
+- Lucky chests with a surprise inside
+- Old Barnaby's shop every 5th cavern, with new stock each visit
 - You get 5 lives, with 2 hearts each
-- Every 5th cavern there's a shop for power-ups, extra lives and upgrades
-- 20 hand-built caverns that get harder as you go, then they loop round tougher
-- Ladders, moving platforms, lifts, conveyors, crumbling ledges and pits
-- Lucky chests with a free power-up inside
+- Continues are rare: buy one, find one, or clear a whole world without losing a life
+- Your game saves as you go
 - Top 10 high score table
-- Same seed, same run, so you can challenge a mate
 
 ![Cavern one](docs/screenshots/04_play_cavern1.png)
+![The Pulley House](docs/screenshots/level_09.png)
+![The Great Hearth](docs/screenshots/level_10.png)
 ![The shop](docs/screenshots/09_shop.png)
 
 ## Controls
@@ -35,20 +39,18 @@ Grab all the keys, get to the portal and head down to the next cavern. Watch you
 | Pause | Options |
 | Mute | R3 |
 | Menus | ✕ select, ○ back |
-| Change seed (title screen) | L1 / R1, Left / Right, or △ for random |
 | Switch shop shelf | L1 / R1 |
 | Leave shop | Options |
 
 ## Install
 
-1. Download `LanternMiner-v0.5.0-beta.zip` from **Releases** and unzip it.
+1. Download `LanternMiner-v0.7.0-beta.zip` from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
 3. Launch it and enjoy.
 
-If it plays up, try the `safe` zip from the same release instead. Saves live in `/data/lantern-miner/`.
+Saves live in `/data/lantern-miner/`.
 
-It's still a beta. The newest bits (lives, shop changes and high scores) haven't had a full test on console yet, so let me
-know if anything's odd.
+It's still a beta, so let me know if anything's odd. Water, ice, wind and fire worlds are on the way.
 
 ## Building
 

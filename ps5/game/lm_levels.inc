@@ -1,4 +1,4 @@
-/* The twenty hand-built caverns. Included by lm_gen.c.
+/* The hand-built caverns. Included by lm_gen.c; the table at the bottom is the order they are played in.
 **
 ** The grid is 32 x 18 tiles; the outer walls, ceiling and floor are added for you. Columns run 1..30, rows 1..16.
 ** Things the miner stands on are given by the row they occupy; items, foes, start and exit by the row they stand IN
@@ -252,31 +252,67 @@ static struct op const lv_abyss[] = {
     FOE(EN_STALKER, 28, 8),
 };
 
-#define LV(map, title, hint) {title, hint, map, (int)(sizeof(map) / sizeof(map[0]))}
+/* ------------------------------------------------------------- World 1 additions */
 
-/* Five per tier, easiest tier first. The first one always opens a run. */
+static struct op const lv_stair[] = {
+    BLOCK(8, 14, 11, 16), BLOCK(12, 11, 15, 16), BLOCK(16, 8, 19, 16), BLOCK(20, 11, 23, 16), BLOCK(24, 14, 26, 16),
+    LEDGE(5, 2, 12), LEDGE(5, 22, 28), LADDER(12, 5, 10), LADDER(22, 5, 10), SPIKES(16, 28, 28),
+    START(2, 16), EXIT(3, 4),
+    KEY(5, 16), KEY(14, 10), KEY(18, 7), KEY(27, 4), KEY(30, 16), KEY(9, 4),
+    GEM(10, 13), GEM(21, 10), GEM(17, 3), CHEST(25, 4),
+    FOE(EN_BEETLE, 25, 13), FOE(EN_GLOW_BAT, 17, 2), FOE(EN_BEETLE, 26, 4), FOE(EN_GLOW_BAT, 6, 9),
+    FOE(EN_BEETLE, 9, 4), FOE(EN_BOUNCER, 29, 16), FOE(EN_WISP, 24, 8),
+};
+
+static struct op const lv_pulley[] = {
+    BLOCK(1, 15, 4, 16), PIT(5, 30),
+    LIFT(6, 9, 15, 2), LEDGE(9, 9, 13), LADDER(11, 5, 8), LEDGE(5, 10, 16), LIFT(18, 5, 12, 2),
+    LEDGE(12, 21, 25), LADDER(24, 8, 11), LEDGE(8, 22, 28), LIFT(29, 4, 8, 2), LEDGE(4, 22, 26),
+    START(2, 14), EXIT(22, 3),
+    KEY(12, 8), KEY(15, 4), KEY(22, 11), KEY(27, 7), KEY(30, 2),
+    GEM(7, 7), GEM(18, 3), GEM(25, 3), CHEST(10, 4),
+    FOE(EN_GLOW_BAT, 14, 12), FOE(EN_GLOW_BAT, 23, 15), FOE(EN_BEETLE, 14, 4), FOE(EN_WISP, 17, 10),
+    FOE(EN_BEETLE, 25, 7), FOE(EN_GLOW_BAT, 8, 2), FOE(EN_PISTON, 27, 12),
+};
+
+static struct op const lv_greathearth[] = {
+    BLOCK(14, 10, 17, 16), PIT(18, 30),
+    LEDGE(13, 3, 11), LEDGE(9, 2, 7), LEDGE(5, 4, 11), LADDER(5, 13, 16), LADDER(3, 9, 12), LADDER(6, 5, 8),
+    SLIDER(5, 13, 19, 3), LEDGE(5, 24, 29), SLIDER(13, 19, 25, 3), LEDGE(13, 29, 30), LEDGE(9, 22, 26),
+    START(2, 16), EXIT(26, 4),
+    KEY(10, 12), KEY(2, 8), KEY(15, 9), KEY(30, 12), KEY(24, 8), KEY(17, 3),
+    GEM(10, 16), GEM(21, 11), GEM(13, 2), CHEST(9, 4),
+    FOE(EN_BEETLE, 11, 16), FOE(EN_BEETLE, 24, 8), FOE(EN_GLOW_BAT, 11, 7), FOE(EN_BOUNCER, 9, 12),
+    FOE(EN_BEETLE, 11, 4), FOE(EN_GLOW_BAT, 22, 2), FOE(EN_WISP, 21, 11), FOE(EN_CHARGER, 28, 4),
+};
+
+#define LV(map, title, hint, biome) {title, hint, biome, map, (int)(sizeof(map) / sizeof(map[0]))}
+
+/* The campaign, in order: ten caverns to a world. World 1 is finished; the caverns after it are the earlier maps
+   waiting to be reworked into their own worlds. */
 static struct level const k_levels[] = {
-    LV(lv_hearth, "Central Hearth", "Keys open the portal"),
-    LV(lv_crossing, "The First Crossing", "Ride across the gap"),
-    LV(lv_loft, "The Ladder Loft", "Climb with Up and Down"),
-    LV(lv_stones, "Stepping Stones", "Mind the drop"),
-    LV(lv_dumbwaiter, "The Dumbwaiter", "Only the lifts go up"),
+    LV(lv_hearth, "Central Hearth", "Keys open the portal", BIOME_TIMBER_HEARTH),
+    LV(lv_loft, "The Ladder Loft", "Climb with Up and Down", BIOME_TIMBER_HEARTH),
+    LV(lv_crossing, "The First Crossing", "Ride across the gap", BIOME_TIMBER_HEARTH),
+    LV(lv_stones, "Stepping Stones", "Mind the drop", BIOME_TIMBER_HEARTH),
+    LV(lv_dumbwaiter, "The Dumbwaiter", "Only the lifts go up", BIOME_TIMBER_HEARTH),
+    LV(lv_zigzag, "Zigzag Galleries", "There and back again", BIOME_TIMBER_HEARTH),
+    LV(lv_stair, "The Miners' Stair", "Up, over and down", BIOME_TIMBER_HEARTH),
+    LV(lv_towers, "The Twin Towers", "Over the great wall", BIOME_TIMBER_HEARTH),
+    LV(lv_pulley, "The Pulley House", "Lifts, ladders, long drop", BIOME_TIMBER_HEARTH),
+    LV(lv_greathearth, "The Great Hearth", "Everything you've learned", BIOME_TIMBER_HEARTH),
 
-    LV(lv_chasm, "The Great Chasm", "Wait for your ride"),
-    LV(lv_zigzag, "Zigzag Galleries", "There and back again"),
-    LV(lv_works, "The Conveyor Works", "Nothing stands still"),
-    LV(lv_bridges, "Rickety Bridges", "Don't stop moving"),
-    LV(lv_ferries, "The Ferry Lines", "Hop from ferry to ferry"),
-
-    LV(lv_towers, "The Twin Towers", "Over the great wall"),
-    LV(lv_lifthall, "The Lift Hall", "Pillar to pillar"),
-    LV(lv_gallery, "The Bramble Gallery", "Watch your feet"),
-    LV(lv_rails, "The Brass Rails", "No solid ground"),
-    LV(lv_honeycomb, "The Honeycomb", "Small steps, long fall"),
-
-    LV(lv_brokenladders, "The Broken Ladders", "Climb, leap, climb"),
-    LV(lv_gauntlet, "The Gauntlet", "No room to hide"),
-    LV(lv_heart, "The Clockwork Heart", "Keep time or fall"),
-    LV(lv_spire, "The Crumbling Spire", "It all gives way"),
-    LV(lv_abyss, "The Grand Abyss", "Everything you've learned"),
+    LV(lv_bridges, "Rickety Bridges", "Don't stop moving", BIOME_GLOW_MOSS),
+    LV(lv_ferries, "The Ferry Lines", "Hop from ferry to ferry", BIOME_GLOW_MOSS),
+    LV(lv_chasm, "The Great Chasm", "Wait for your ride", BIOME_GLOW_MOSS),
+    LV(lv_lifthall, "The Lift Hall", "Pillar to pillar", BIOME_GLOW_MOSS),
+    LV(lv_honeycomb, "The Honeycomb", "Small steps, long fall", BIOME_GLOW_MOSS),
+    LV(lv_gallery, "The Bramble Gallery", "Watch your feet", BIOME_FROST_LANTERN),
+    LV(lv_rails, "The Brass Rails", "No solid ground", BIOME_AMETHYST_GROTTO),
+    LV(lv_brokenladders, "The Broken Ladders", "Climb, leap, climb", BIOME_AMETHYST_GROTTO),
+    LV(lv_spire, "The Crumbling Spire", "It all gives way", BIOME_AMETHYST_GROTTO),
+    LV(lv_works, "The Conveyor Works", "Nothing stands still", BIOME_CLOCKWORK_CELLAR),
+    LV(lv_heart, "The Clockwork Heart", "Keep time or fall", BIOME_CLOCKWORK_CELLAR),
+    LV(lv_gauntlet, "The Gauntlet", "No room to hide", BIOME_CLOCKWORK_CELLAR),
+    LV(lv_abyss, "The Grand Abyss", "The last of the deep", BIOME_CLOCKWORK_CELLAR),
 };

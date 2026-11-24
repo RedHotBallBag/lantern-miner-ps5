@@ -14,7 +14,7 @@ clang -g -std=gnu17 -O1 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
     -l:libvulkan.so.1 -lz -lm -lpthread -o "$W/app_shots"
 rm -rf "$W/shots" && mkdir -p "$W/shots"
 # a sample table so the High Scores screenshots are not empty
-rm -f "$W/data/scores.cfg" "$W/data/save.cfg"
+rm -f "$W/data/scores.cfg" "$W/data/save.cfg" "$W/data/run.sav"
 cat > "$W/data/scores.cfg" <<'EOT'
 last=WILLY
 WILLY|24800|17

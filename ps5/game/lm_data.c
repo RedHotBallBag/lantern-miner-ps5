@@ -60,9 +60,8 @@ struct lm_shop_def const lm_shop[SHOP_COUNT] = {
     [SHOP_STARLIGHT_MAGNET] = {"Starlight Magnet", "Magnet", "Pulls nearby keys and relics to you for 20s. Stack up to x3 for longer.", 2600, TIER_POWER, 0xffe347, 3, -1},
     [SHOP_EXTRA_LIFE] = {"Spare Lantern", "+1 Life", "Adds a life. You have 5 to start and can carry up to 9.", 600, TIER_SUPPLY, 0xf43fa5, 0, -1},
     [SHOP_DELVERS_CACHE] = {"Delver\xe2\x80\x99s Cache", "Cache", "+2 Lives, full Hearts, and a fresh Tea flask. Unlocks at the 3rd stall.", 4000, TIER_SPECIAL, 0xf5a623, 0, -1},
-    [SHOP_PHOENIX_FEATHER] = {"Phoenix Feather", "Phoenix", "When your last life goes you rise again with 3 lives. One per run. Unlocks at the 5th stall.", 9000, TIER_SPECIAL, 0xff6b3d, 1, -1},
+    [SHOP_PHOENIX_FEATHER] = {"Phoenix Feather", "Phoenix", "When your last life goes you rise again with 3 lives. One per run. Unlocks at the 4th stall.", 9000, TIER_SPECIAL, 0xff6b3d, 1, -1},
+    [SHOP_CONTINUE] = {"Continue Lantern", "Continue", "Out of lives? Carry on from the start of this world with 5 fresh ones. Hold up to 3.", 8000, TIER_SPECIAL, 0x2ce87d, 3, -1},
     [SHOP_CLOCKWORK_SLOW] = {"Clockwork Slow", "Slow", "Guardians and conveyors run at 75% speed for 20s. Stack up to x3.", 3000, TIER_POWER, 0x22e4f5, 3, -1},
 };
 
-char const *const lm_seed_words[] = {"HEARTH", "WILLY", "KETTLE", "LANTERN", "SPECCY", "AMBER", "MOSSY", "QUARTZ", "COBALT", "CAVERNS", "BRASS", "BEETLE"};
-int const lm_seed_word_count = 12;

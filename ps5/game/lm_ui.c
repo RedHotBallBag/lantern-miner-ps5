@@ -391,6 +391,11 @@ ui_item_icon(struct vkr *r, int item, float cx, float cy, float s, uint32_t col)
         vkr_rect(r, cx - 9 * u, cy - 13 * u, 18 * u, 2.5f * u, HEX(C_CREAM));
         vkr_rect(r, cx - 9 * u, cy + 10.5f * u, 18 * u, 2.5f * u, HEX(C_CREAM));
         break;
+    case SHOP_CONTINUE: /* a ring with an arrow head: go again */
+        vkr_circle_ring(r, cx, cy, s * 0.42f, s * 0.13f, HEX(col));
+        vkr_tri(r, cx + s * 0.18f, cy - s * 0.46f, cx + s * 0.62f, cy - s * 0.30f, cx + s * 0.22f, cy - s * 0.06f, HEX(col));
+        vkr_circle(r, cx, cy, s * 0.13f, HEX(0xffe347));
+        break;
     case SHOP_EXTRA_LIFE: /* lantern */
         vkr_rrect(r, cx - 6 * u, cy - 6 * u, 12 * u, 16 * u, 3 * u, c);
         vkr_ring(r, cx, cy - 9 * u, 7 * u, 6 * u, 3 * u, 1.8f * u, c);
