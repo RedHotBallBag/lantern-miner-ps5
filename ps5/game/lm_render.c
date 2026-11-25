@@ -401,6 +401,17 @@ draw_collectable(struct wc const *c, struct lm_collectable const *it, double tim
             poly(c, d, 4, col);
             fr(c, x - 2, y - 4, 3, 3, RGB(0xffffff));
         }
+    } else if (it->kind == COL_AIR) {
+        /* a little corked bottle of air */
+        fr(c, x - 3, y - 11, 6, 3, RGB(0xa76e42));
+        fr(c, x - 2, y - 8, 4, 3, RGB(0xd8fbff));
+        fr(c, x - 6, y - 5, 12, 14, RGB(0xd8fbff));
+        fr(c, x - 5, y - 4, 10, 12, RGB(0x1b6f86));
+        fr(c, x - 5, y - 1, 10, 9, RGB(0x22e4f5));
+        fr(c, x - 4, y - 3, 2, 9, RGBA(0xffffff, 0.85));
+        double rise = time * 1.6 + it->phase;
+        rise -= lm_floor(rise);
+        fr(c, x + 1, lm_round(y + 5 - rise * 8), 2, 2, RGB(0xffffff));
     } else {
         draw_chest(c, lm_round(it->x), lm_round(it->base_y), false, time + it->phase);
     }
@@ -458,6 +469,8 @@ draw_enemy(struct wc const *c, struct lm_enemy const *e, double time, bool slow)
         break;
     }
     case EN_STALKER: {
+        if (e->cooldown > 0 && (int)(time * 12) % 2)
+            break; /* flickering into being */
         double bob = lm_sin(time * 5 + phase) * 2.5;
         double dy = lm_round(y + bob);
         disc(c, x + w / 2, dy + h / 2, 16, RGBA(0x22e4f5, 0.16));
@@ -634,6 +647,93 @@ draw_lighting(struct wc const *c, struct lm_game const *g, bool bloom)
         glow(c, it->x, it->y, rad, col, 0.5);
     }
     vkr_blend(c->r, false);
+}
+
+/* ------------------------------------------------------------------- icons */
+
+void
+lm_draw_icon(struct vkr *r, int icon, float x, float y, float scale, double time)
+{
+    static struct lm_game g; /* a scratch cavern holding just the thing being shown */
+    struct wc c = {r, x, y, scale};
+    memset(&g.cavern, 0, sizeof(g.cavern));
+    memset(g.crumble, 0, sizeof(g.crumble));
+    g.n_movers = 0;
+    g.keys_collected = 0;
+    g.portal_unlocked = false;
+    g.cavern.depth = 1;
+
+    if (icon == ICON_MINER || icon == ICON_FALL) {
+        struct lm_player p = {0};
+        p.x = -10;
+        p.y = -13;
+        p.width = 20;
+        p.height = 26;
+        p.facing = 1;
+        p.grounded = icon == ICON_MINER;
+        p.squash_x = icon == ICON_FALL ? 0.85 : 1;
+        p.squash_y = icon == ICON_FALL ? 1.15 : 1;
+        for (int i = 0; i < 4; i++) {
+            p.scarf[i].x = -i * 4;
+            p.scarf[i].y = icon == ICON_FALL ? -2 - i * 5 : -2 + i;
+        }
+        draw_player(&c, &p, time, RGB(lm_biomes[0].lantern_glow));
+    } else if (icon >= ICON_KEY && icon <= ICON_CHEST) {
+        struct lm_collectable it = {0};
+        it.kind = icon == ICON_KEY ? COL_KEY : icon == ICON_AIR ? COL_AIR : icon == ICON_CHEST ? COL_CHEST : COL_RELIC;
+        it.relic_variant = icon == ICON_GEM ? 1 : 0;
+        draw_collectable(&c, &it, time);
+    } else if (icon == ICON_PORTAL_SHUT || icon == ICON_PORTAL_OPEN) {
+        c.s = scale * 0.62f;
+        g.cavern.portal.x = -TILE_SIZE;
+        g.cavern.portal.y = -TILE_SIZE - 2;
+        g.cavern.keys_total = 4;
+        g.keys_collected = 2;
+        g.portal_unlocked = icon == ICON_PORTAL_OPEN;
+        draw_portal(&c, &g, time);
+    } else if (icon >= ICON_BEETLE && icon <= ICON_STALKER) {
+        static int const kind[] = {EN_BEETLE, EN_CHARGER, EN_BOUNCER, EN_GLOW_BAT, EN_PISTON, EN_WISP, EN_SPITTER, EN_STALKER};
+        struct lm_enemy e = {0};
+        e.s.kind = kind[icon - ICON_BEETLE];
+        e.s.direction = 1;
+        e.width = e.s.kind == EN_BEETLE || e.s.kind == EN_CHARGER ? 24 : 22;
+        e.height = e.s.kind == EN_BEETLE || e.s.kind == EN_CHARGER ? 20 : 22;
+        e.s.x = -e.width / 2;
+        e.s.y = -e.height / 2;
+        draw_enemy(&c, &e, time, false);
+    } else if (icon == ICON_SPARK) {
+        double pulse = 1 + 0.2 * lm_sin(time * 18);
+        disc(&c, 0, 0, 11 * pulse, RGBA(0xf43fa5, 0.32));
+        disc(&c, 0, 0, 6, RGB(0xf43fa5));
+        fr(&c, -2, -2, 4, 4, RGB(0xffffff));
+    } else if (icon == ICON_LIFT) {
+        c.s = scale * 0.7f;
+        struct lm_mover *m = &g.movers[0];
+        memset(m, 0, sizeof(*m));
+        m->width = 40;
+        m->min_x = -28;
+        m->max_x = -12;
+        m->x = -20;
+        m->y = m->min_y = m->max_y = -5;
+        g.n_movers = 1;
+        draw_movers(&c, &g, time);
+    } else {
+        /* one tile (or a short run of them), drawn by the cavern's own tile code */
+        int tile = icon == ICON_SPIKES ? T_BRAMBLE : icon == ICON_POOL ? T_PIT : icon == ICON_CRUMBLE ? T_CRUMBLE : T_CONVEYOR_RIGHT;
+        if (icon == ICON_LADDER) {
+            g.cavern.ladders[0][0] = g.cavern.ladders[1][0] = 1;
+            c.s = scale * 0.65f;
+            c.ox = x - TILE_SIZE * 0.5f * c.s;
+            c.oy = y - (TILE_SIZE - 4) * c.s;
+            draw_ladders(&c, &g.cavern);
+        } else {
+            g.cavern.tiles[0][0] = (uint8_t)tile;
+            c.s = scale * 1.1f;
+            c.ox = x - TILE_SIZE * 0.5f * c.s;
+            c.oy = y - (tile == T_BRAMBLE || tile == T_PIT ? TILE_SIZE * 0.65f : 7) * c.s;
+            draw_tiles(&c, &g, time, false);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ frame */

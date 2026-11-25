@@ -146,7 +146,8 @@ search(struct snap *from, int target)
             struct lm_player const *p = &g.player;
             uint64_t key = (uint64_t)(p->x / 8) | (uint64_t)(p->y / 8) << 8 | (uint64_t)(p->rider + 1) << 16 |
                            (uint64_t)p->climbing << 20 | (uint64_t)p->grounded << 21 |
-                           (uint64_t)(g.n_movers ? ((long)(g.elapsed / 0.5)) % 64 : 0) << 22;
+                           (uint64_t)(g.n_movers ? ((long)(g.elapsed / 0.5)) % 64 : 0) << 22 |
+                           (uint64_t)(p->vx > 60 ? 1 : p->vx < -60 ? 2 : 0) << 28; /* a run-up changes what a jump reaches */
             uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 40) & (SEEN_BITS - 1);
             if (seen[h / 8] & (1 << (h % 8)))
                 continue;
@@ -192,7 +193,7 @@ solve(int level, bool mirror, int depth)
         done[best] = true;
         if (!search(&at, best)) {
             printf("  %s%s depth %d: cannot reach %s at column %d row %d\n", g.cavern.name, mirror ? " (mirrored)" : "", depth,
-                   g.cavern.collect[best].kind == COL_KEY ? "key" : g.cavern.collect[best].kind == COL_CHEST ? "chest" : "gem",
+                   g.cavern.collect[best].kind == COL_KEY ? "key" : g.cavern.collect[best].kind == COL_CHEST ? "chest" : g.cavern.collect[best].kind == COL_AIR ? "air bottle" : "gem",
                    (int)(g.cavern.collect[best].x / TILE_SIZE), (int)(g.cavern.collect[best].y / TILE_SIZE));
             ok = false;
         }
@@ -200,6 +201,14 @@ solve(int level, bool mirror, int depth)
     if (!search(&at, -1)) {
         printf("  %s%s depth %d: cannot reach the portal\n", g.cavern.name, mirror ? " (mirrored)" : "", depth);
         ok = false;
+    }
+    if (depth != 50) {
+        printf("  %s%s: route %.0f s, air %.0f s (%.0f s with the bottle)\n", g.cavern.name, mirror ? " (mirrored)" : "", at.t,
+               g.cavern.air_secs, g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR));
+        if (at.t > g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR)) {
+            printf("  not enough air\n");
+            ok = false;
+        }
     }
     /* foes back in: standing at the start for a few seconds must be safe, even with every foe present */
     lm_init(&g, 1);

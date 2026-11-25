@@ -138,6 +138,7 @@ create_player(struct lm_game *g)
     p->squash_x = 1;
     p->squash_y = 1;
     p->rider = -1;
+    p->fall_top = py;
     for (int i = 0; i < 4; i++) {
         p->scarf[i].x = px + 10;
         p->scarf[i].y = py + 11;
@@ -244,6 +245,7 @@ lm_start_run(struct lm_game *g, char const *seed)
     g->lives = START_LIVES;
     g->phoenix = false;
     g->continues = g->continues_bought = 0;
+    g->lives_bought = 0;
     g->world_score = 0;
     g->flawless = true;
     g->flawless_award = false;
@@ -321,9 +323,14 @@ lm_shop_cost(struct lm_game const *g, int item)
     int cost = lm_shop[item].cost;
     if (item == SHOP_CONTINUE)
         cost += cost / 2 * g->continues_bought;
+    if (item == SHOP_EXTRA_LIFE || item == SHOP_DELVERS_CACHE)
+        cost += LIFE_PRICE_STEP * g->lives_bought;
+    if (lm_shop[item].perk >= 0)
+        cost += cost / 2 * g->perks[lm_shop[item].perk]; /* each extra level of a perk is 50% dearer */
     if (power_is_timed(item))
         cost += cost * 3 * g->powers[item - SHOP_SPRING_BOOTS] / 4;
-    cost = cost * (100 - lm_shop_discount(g)) / 100;
+    if (item != SHOP_EXTRA_LIFE && item != SHOP_DELVERS_CACHE && item != SHOP_PHOENIX_FEATHER && item != SHOP_CONTINUE)
+        cost = cost * (100 - lm_shop_discount(g)) / 100;
     return (cost + 5) / 10 * 10; /* tidy to the nearest 10 */
 }
 
@@ -469,9 +476,11 @@ lm_shop_purchase(struct lm_game *g, int item)
             return false;
         g->relic_points -= cost;
         g->lives += 1;
+        g->lives_bought += 1;
     } else if (item == SHOP_DELVERS_CACHE) {
         g->relic_points -= cost;
         g->lives = g->lives + 2 < MAX_LIVES ? g->lives + 2 : MAX_LIVES;
+        g->lives_bought += 2;
         g->hearts = g->max_hearts;
         if (g->powers[PU_TEA_THERMOS] < 3)
             g->powers[PU_TEA_THERMOS] += 1;
@@ -717,6 +726,7 @@ check_pit(struct lm_game *g, struct lm_player *p)
     p->grounded = true;
     p->climbing = false;
     p->rider = -1;
+    p->fall_top = p->y;
     p->invuln = lm_max(p->invuln, INVULN_DURATION);
     for (int i = 0; i < 4; i++) {
         p->scarf[i].x = p->x + 10;
@@ -884,6 +894,8 @@ update_player(struct lm_game *g, double dt)
     int feather = g->perks[PERK_FEATHERSTEP];
 
     p->invuln = lm_max(0, p->invuln - dt);
+    p->lead = lm_max(0, p->lead - dt);
+    p->muddle = lm_max(0, p->muddle - dt);
     p->spring = lm_max(0, p->spring - dt);
     p->magnet = lm_max(0, p->magnet - dt);
     p->slow = 0; /* applied through power_slow() */
@@ -919,17 +931,20 @@ update_player(struct lm_game *g, double dt)
     int move_dir = 0;
     if (g->in_left) move_dir -= 1;
     if (g->in_right) move_dir += 1;
+    if (p->muddle > 0)
+        move_dir = -move_dir;
     if (move_dir != 0)
         p->facing = move_dir > 0 ? 1 : -1;
 
     if (update_climb(g, p, dt)) {
+        p->fall_top = p->y;
         g->prev_jump = g->in_jump;
         update_scarf(g, p, dt);
         check_hazards(g, p);
         return;
     }
 
-    double max_speed = MOVE_SPEED * (1 + cleats * 0.12);
+    double max_speed = MOVE_SPEED * (1 + cleats * 0.12) * (p->lead > 0 ? LEAD_SPEED : 1);
     double target_vx = move_dir * max_speed;
     double accel = p->grounded ? MOVE_ACCEL_GROUND : MOVE_ACCEL_AIR;
     if (p->vx < target_vx)
@@ -968,6 +983,7 @@ update_player(struct lm_game *g, double dt)
         } else if (can_air_hop && !p->has_used_double_jump) {
             p->vy = p->spring > 0 ? DOUBLE_JUMP_VELOCITY * 1.08 : DOUBLE_JUMP_VELOCITY * 0.9;
             p->has_used_double_jump = true;
+            p->fall_top = p->y; /* a flutter in mid-air breaks the fall */
             p->jump_buffer = 0;
             p->squash_x = 0.76;
             p->squash_y = 1.26;
@@ -995,6 +1011,19 @@ update_player(struct lm_game *g, double dt)
     p->rider = -1;
     resolve_vertical(g, p, prev_bottom);
     land_on_movers(g, p, prev_bottom);
+
+    /* too far to fall: hearts and wards do not help */
+    if (p->grounded && p->y - p->fall_top > MAX_SAFE_FALL) {
+        g->hearts = 0;
+        g->shake_intensity = 10;
+        g->hit_flash = 1;
+        spawn_float(g, p->x + p->width * 0.5, p->y - 8, "SPLAT!", 0xf43fa5);
+        lose_life(g, false);
+        if (g->respawn_timer > 0)
+            snprintf(g->banner.title, sizeof(g->banner.title), "Too Far to Fall!");
+        return;
+    }
+    p->fall_top = p->grounded ? p->y : lm_min(p->fall_top, p->y);
 
     if (!was_grounded && p->grounded && impact_vy > 130) {
         double intensity = lm_min(1, impact_vy / MAX_FALL_SPEED);
@@ -1051,6 +1080,11 @@ update_enemies(struct lm_game *g, double dt)
         struct lm_enemy_spawn *s = &e->s;
         if (e->stun > 0) {
             e->stun -= dt;
+            continue;
+        }
+
+        if (s->kind == EN_STALKER && e->cooldown > 0) { /* still taking shape: harmless */
+            e->cooldown -= dt;
             continue;
         }
 
@@ -1258,6 +1292,29 @@ update_projectiles(struct lm_game *g, double dt)
     }
 }
 
+/* A cursed chest's guardian: it rises in the far top corner and, after a moment's warning, follows the miner
+   through walls for the rest of the cavern. */
+static void
+release_ghoul(struct lm_game *g)
+{
+    if (g->n_enemies >= LM_MAX_ENEMIES)
+        return;
+    struct lm_enemy *e = &g->enemies[g->n_enemies++];
+    memset(e, 0, sizeof(*e));
+    e->s.kind = EN_STALKER;
+    e->s.x = g->player.x < CANVAS_W * 0.5 ? CANVAS_W - 2.0 * TILE_SIZE : TILE_SIZE;
+    e->s.y = TILE_SIZE * 1.5;
+    e->s.min_x = e->s.min_y = TILE_SIZE;
+    e->s.max_x = CANVAS_W - 2.0 * TILE_SIZE;
+    e->s.max_y = CANVAS_H - 2.0 * TILE_SIZE;
+    e->s.speed = 56 + lm_min(24, g->depth);
+    e->s.direction = 1;
+    e->width = e->height = 22;
+    e->anchor_x = e->s.x;
+    e->anchor_y = e->s.y;
+    e->cooldown = 2.0;
+}
+
 static void
 open_chest(struct lm_game *g, struct lm_collectable const *item)
 {
@@ -1272,7 +1329,25 @@ open_chest(struct lm_game *g, struct lm_collectable const *item)
         prize = CHEST_JACKPOT;
     if (prize == PU_TEA_THERMOS && g->powers[PU_TEA_THERMOS] >= 3)
         prize = CHEST_JACKPOT;
-    if (prize == CHEST_LIFE) {
+    if (prize >= CHEST_LEAD) {
+        color = 0xb45cff;
+        if (prize == CHEST_LEAD) {
+            p->lead = LEAD_TIME;
+            snprintf(buf, sizeof(buf), "CURSED! LEAD BOOTS");
+        } else if (prize == CHEST_MUDDLE) {
+            p->muddle = MUDDLE_TIME;
+            snprintf(buf, sizeof(buf), "CURSED! LEFT IS RIGHT");
+        } else if (prize == CHEST_LEAK) {
+            g->air = lm_max(5, g->air - LEAK_AIR);
+            snprintf(buf, sizeof(buf), "CURSED! AIR LEAK");
+        } else {
+            release_ghoul(g);
+            snprintf(buf, sizeof(buf), "CURSED! SOMETHING IS COMING");
+        }
+        lm_audio_hurt(false);
+        g->hit_flash = 0.6;
+        g->shake_intensity = 6;
+    } else if (prize == CHEST_LIFE) {
         g->lives += 1;
         color = 0xf43fa5;
         snprintf(buf, sizeof(buf), "SPARE LANTERN! +1 LIFE");
@@ -1299,7 +1374,8 @@ open_chest(struct lm_game *g, struct lm_collectable const *item)
         }
         snprintf(buf, sizeof(buf), "%s!", lm_powerups[prize].name);
     }
-    lm_audio_powerup();
+    if (prize < CHEST_LEAD)
+        lm_audio_powerup();
     g->hitstop = 0.035;
     spawn_burst(g, item->x, item->y, 22, color, 160);
     spawn_float(g, item->x, item->y - 18, buf, color);
@@ -1323,7 +1399,7 @@ check_collectables(struct lm_game *g, double dt)
         double dx = pcx - item->x, dy = pcy - item->y;
         double dist = lm_hypot(dx, dy);
 
-        if (magnet_radius > 0 && item->kind != COL_CHEST && dist < magnet_radius && dist > 1) {
+        if (magnet_radius > 0 && (item->kind == COL_KEY || item->kind == COL_RELIC) && dist < magnet_radius && dist > 1) {
             double pull = p->magnet > 0 ? 275 : 135;
             item->x += (dx / dist) * pull * dt;
             item->y += (dy / dist) * pull * dt;
@@ -1336,7 +1412,6 @@ check_collectables(struct lm_game *g, double dt)
                 g->total_keys_run += 1;
                 int pts = (int)lm_round(200 * score_mult);
                 g->score += pts;
-                g->air = lm_min(MAX_AIR, g->air + 9);
                 lm_audio_key(g->keys_collected - 1);
                 spawn_burst(g, item->x, item->y, 14, 0xf43fa5, 135);
                 snprintf(buf, sizeof(buf), "+%d", pts);
@@ -1358,12 +1433,17 @@ check_collectables(struct lm_game *g, double dt)
                 int earned = (int)lm_round(base * score_mult);
                 g->relic_points += earned;
                 g->score += earned;
-                g->air = lm_min(MAX_AIR, g->air + 6);
                 lm_audio_relic();
                 spawn_burst(g, item->x, item->y, 10, 0xffe347, 105);
                 snprintf(buf, sizeof(buf), "+%d PTS", earned);
                 spawn_float(g, item->x, item->y - 10, buf, 0xffe347);
                 rumble(g, 0.12, 0.04);
+            } else if (item->kind == COL_AIR) {
+                g->air = lm_min(MAX_AIR, g->air + AIR_BOTTLE);
+                lm_audio_powerup();
+                spawn_burst(g, item->x, item->y, 14, 0x22e4f5, 120);
+                spawn_float(g, item->x, item->y - 10, "+AIR", 0x22e4f5);
+                rumble(g, 0.2, 0.08);
             } else if (item->kind == COL_CHEST) {
                 open_chest(g, item);
             }
@@ -1429,8 +1509,7 @@ update_air(struct lm_game *g, double dt)
     if (g->transition_locked)
         return;
     double drain_mult = lm_pow(0.78, g->perks[PERK_BRASS_LANTERN]);
-    double depth_drain = 1 + lm_min(0.65, (g->depth - 1) * 0.045);
-    g->air = lm_max(0, g->air - BASE_AIR_DRAIN_PER_SEC * drain_mult * depth_drain * dt);
+    g->air = lm_max(0, g->air - MAX_AIR / g->cavern.air_secs * drain_mult * dt);
     if (g->air <= 0 && g->powers[PU_TEA_THERMOS] > 0) {
         /* a packed Tea Thermos drinks itself instead of the lamp going out */
         struct lm_player const *p = &g->player;
@@ -1711,7 +1790,8 @@ lm_save_run(struct lm_game const *g, FILE *f, bool in_shop)
             g->relic_points, g->lives, g->hearts, g->max_hearts);
     fprintf(f, "continues=%d\ncontinues_bought=%d\nflawless=%d\nphoenix=%d\nnext_shield=%d\nshield_on=%d\n", g->continues,
             g->continues_bought, g->flawless, g->phoenix, g->next_shield, g->player.has_shield && g->pending_advance <= 0);
-    fprintf(f, "relics=%d\nkeys=%d\nchest_taken=%d\n", g->total_relics_run, g->total_keys_run, g->chest_taken);
+    fprintf(f, "relics=%d\nkeys=%d\nchest_taken=%d\nlives_bought=%d\n", g->total_relics_run, g->total_keys_run, g->chest_taken,
+            g->lives_bought);
     for (int i = 0; i < PERK_COUNT; i++)
         fprintf(f, "perk%d=%d\n", i, g->perks[i]);
     for (int i = 0; i < PU_COUNT; i++)
@@ -1726,7 +1806,8 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     int perks[PERK_COUNT] = {0}, powers[PU_COUNT] = {0}, times[PU_COUNT] = {0};
     int v[16] = {0};
     static char const *const names[] = {"score", "world_score", "relic_points", "lives", "hearts", "max_hearts", "continues",
-                                        "continues_bought", "flawless", "phoenix", "next_shield", "relics", "keys", "chest_taken"};
+                                        "continues_bought", "flawless", "phoenix", "next_shield", "relics", "keys", "chest_taken",
+                                        "lives_bought"};
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         int n, k;
@@ -1767,6 +1848,7 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     g->total_relics_run = v[11];
     g->total_keys_run = v[12];
     g->chest_taken = v[13];
+    g->lives_bought = v[14];
     memcpy(g->perks, perks, sizeof(perks));
     load_cavern(g, depth);
     /* loading a cavern spends shields, so put them back exactly as saved */

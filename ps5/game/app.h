@@ -45,7 +45,7 @@ bool app_wants_exit(struct app const *a);
 void app_shutdown(struct app *a);
 
 /* Test hooks for the desktop harness. */
-enum { APP_SC_TITLE, APP_SC_PLAY, APP_SC_PAUSE, APP_SC_SHOP, APP_SC_OVER, APP_SC_SETTINGS, APP_SC_NAME, APP_SC_SCORES, APP_SC_CONTINUE };
+enum { APP_SC_TITLE, APP_SC_PLAY, APP_SC_PAUSE, APP_SC_SHOP, APP_SC_OVER, APP_SC_SETTINGS, APP_SC_NAME, APP_SC_SCORES, APP_SC_CONTINUE, APP_SC_HELP };
 struct lm_game;
 struct lm_game *app_debug_game(struct app *a);
 void app_debug_goto(struct app *a, int screen);

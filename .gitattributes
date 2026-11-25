@@ -3,3 +3,5 @@
 *.jpg binary
 *.wav binary
 *.ttf binary
+*.at9 binary
+*.dds binary

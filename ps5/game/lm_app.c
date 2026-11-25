@@ -12,6 +12,7 @@
 #include <time.h>
 
 #define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
@@ -21,8 +22,8 @@
 
 struct app;
 static void scores_load(struct app *a);
-enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES, SC_CONTINUE };
-enum { IMG_TITLE, IMG_CAMP, IMG_SHOP, IMG_COUNT };
+enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES, SC_CONTINUE, SC_HELP };
+enum { IMG_TITLE, IMG_CAMP, IMG_SHOP, IMG_QR, IMG_COUNT };
 
 #define JUMP_BUTTONS (PAD_CROSS | PAD_CIRCLE | PAD_SQUARE | PAD_TRIANGLE | PAD_R1 | PAD_L1 | PAD_R2 | PAD_L2)
 
@@ -58,6 +59,7 @@ struct app {
 
     /* images */
     int img[IMG_COUNT];
+    int help_page, help_from; /* How to Play: page shown, and the screen to go back to */
     int img_loaded;
     uint32_t spare;
 
@@ -212,6 +214,7 @@ start_run(struct app *a)
 }
 
 static void open_shop(struct app *a);
+static void open_help(struct app *a);
 
 static void
 resume_run(struct app *a)
@@ -250,7 +253,7 @@ toast(struct app *a, char const *msg)
 static void
 load_images(struct app *a, struct vkr *r)
 {
-    static char const *const files[IMG_COUNT] = {"art/title.jpg", "art/camp.jpg", "art/shop.jpg"};
+    static char const *const files[IMG_COUNT] = {"art/title.jpg", "art/camp.jpg", "art/shop.jpg", "art/qr.png"};
     if (a->img_loaded >= IMG_COUNT)
         return;
     int i = a->img_loaded++;
@@ -323,6 +326,13 @@ app_create(struct app_env const *env)
         a->img[i] = -1;
     a->set = (struct settings){10, 10, false, 1, true, true, true};
     lm_audio_init();
+    {
+        char p[300];
+        snprintf(p, sizeof(p), "%s/music/theme.wav", env->asset_dir);
+        bool ok = lm_audio_load_title_track(p);
+        if (env->log)
+            env->log(ok ? "music: title theme %s" : "music: cannot load %s, using the synth tune", p);
+    }
     lm_init(&a->g, (uint32_t)ts.tv_nsec ^ (uint32_t)ts.tv_sec * 2654435761u);
     load_all(a);
     scores_load(a);
@@ -536,7 +546,7 @@ hintbar(struct vkr *r, int n, int const *glyphs, char const *const *labels)
 /* title-art lantern positions in the 1376x768 source image */
 static float const k_title_lanterns[7][2] = {{132, 172}, {989, 150}, {876, 202}, {1241, 168}, {463, 530}, {696, 662}, {619, 617}};
 
-enum { TM_CONTINUE, TM_NEW, TM_SCORES, TM_SETTINGS, TM_EXIT };
+enum { TM_CONTINUE, TM_NEW, TM_HELP, TM_SCORES, TM_SETTINGS, TM_EXIT, TM_COUNT };
 
 /* The title menu depends on whether there is a run to continue. Fills the labels; returns how many. */
 static int
@@ -546,6 +556,7 @@ title_menu(struct app const *a, char const **labels)
     if (a->has_save)
         labels[n++] = "Continue";
     labels[n++] = a->confirm_new ? "Lose your save? Press again" : "New Game";
+    labels[n++] = "How to Play";
     labels[n++] = "High Scores";
     labels[n++] = "Settings";
     labels[n++] = "Exit to Home";
@@ -610,13 +621,13 @@ draw_title(struct app *a, struct vkr *r, double dt)
     ui_text_spaced(r, VKR_SANS, 27, 326, 286, 7.2f, HEX(0xd4c7b7), "A COSY CAVERN ADVENTURE");
 
     ui_paragraph(r, VKR_SANS, 27, 120, 372, 800, 40, HEX(0xe6dccb),
-                 "Journey through lantern-lit caverns inspired by the 1983 ZX Spectrum classic. Gather flashing keys, dodge "
-                 "the guardians, and save Relic Points for Old Barnaby\xe2\x80\x99s Shop, which has something new every time you reach it.");
+                 "Journey through lantern-lit caverns inspired by the 1983 ZX Spectrum classic. Gather flashing keys, watch "
+                 "your air, dodge the guardians, and save Relic Points for Old Barnaby\xe2\x80\x99s Shop, which has something new every time you reach it.");
 
     /* menu */
-    char const *labels[5];
+    char const *labels[TM_COUNT];
     int count = title_menu(a, labels);
-    float mx = 120, my = 566, mw = 560, mh = 64, gap = 10;
+    float mx = 120, my = 548, mw = 560, mh = 56, gap = 8;
     for (int i = 0; i < count; i++) {
         float y = my + i * (mh + gap);
         ui_button(r, mx, y, mw, mh, labels[i], sel == i, i == 0, a->menu_anim[i], t);
@@ -661,8 +672,16 @@ draw_title(struct app *a, struct vkr *r, double dt)
     {
         static int const gl[2] = {G_CROSS, G_DPAD_UD};
         static char const *const lb[2] = {"Select", "Move"};
-        draw_version(r, 0.7f);
         hintbar(r, 2, gl, lb);
+        draw_version(r, 0.7f);
+    }
+    if (a->img[IMG_QR] >= 0) {
+        /* buy me a coffee, above the build number */
+        float const s = 184, qx = 1856 - s, qy = 806;
+        vkr_shadow(r, qx - 8, qy - 8, s + 16, s + 16, 14, 24, HEXA(0x000000, 0.6));
+        vkr_rrect(r, qx - 8, qy - 8, s + 16, s + 16, 14, HEX(0xffffff));
+        vkr_image(r, a->img[IMG_QR], qx, qy, s, s, 6, HEX(0xffffff));
+        ui_text_c(r, VKR_SANS_BOLD, 24, qx + s / 2, qy - 46, HEX(C_YELLOW), "Buy me a coffee");
     }
 }
 
@@ -682,10 +701,22 @@ draw_hud(struct app *a, struct vkr *r)
     lx += ui_text_w(r, VKR_MONO_BOLD, 27, b) + 16;
     ui_text(r, VKR_MONO, 27, lx, 14, HEXA(C_CREAM, 0.3), "\xc2\xb7");
     lx += 30;
-    ui_text(r, VKR_DISPLAY_SEMI, 34, lx, 8, HEX(C_CREAM), g->cavern.name);
-    lx += ui_text_w(r, VKR_DISPLAY_SEMI, 34, g->cavern.name) + 22;
     snprintf(b, sizeof(b), "World %d \xc2\xb7 %s", lm_world_of(g->depth), bio->label);
     ui_text(r, VKR_SANS, 22, lx, 17, HEX(C_DIM), b);
+    lx += ui_text_w(r, VKR_SANS, 22, b) + 40;
+    /* permanent gear, as far as there is room before the right-hand readouts */
+    for (int p = 0; p < PERK_COUNT; p++) {
+        if (g->perks[p] <= 0)
+            continue;
+        if (g->perks[p] > 1)
+            snprintf(b, sizeof(b), "%s x%d", lm_perks[p].short_label, g->perks[p]);
+        else
+            snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
+        if (lx + ui_text_w(r, VKR_SANS_BOLD, 22, b) > 930)
+            break;
+        ui_text(r, VKR_SANS_BOLD, 22, lx, 17, HEX(lm_perks[p].accent), b);
+        lx += ui_text_w(r, VKR_SANS_BOLD, 22, b) + 22;
+    }
 
     float rx = 1868;
     lm_fmt_int(b, sizeof(b), g->score);
@@ -694,6 +725,17 @@ draw_hud(struct app *a, struct vkr *r)
     ui_text_r(r, VKR_SANS, 22, rx, 18, HEX(C_DIM), "Score");
     rx -= ui_text_w(r, VKR_SANS, 22, "Score") + 36;
 
+    /* curses from a bad chest, counting down */
+    if (g->player.lead > 0) {
+        snprintf(b, sizeof(b), "Lead Boots %ds", (int)(g->player.lead + 0.99));
+        ui_text_r(r, VKR_MONO_BOLD, 24, rx, 14, HEX(0xb45cff), b);
+        rx -= ui_text_w(r, VKR_MONO_BOLD, 24, b) + 28;
+    }
+    if (g->player.muddle > 0) {
+        snprintf(b, sizeof(b), "Muddled %ds", (int)(g->player.muddle + 0.99));
+        ui_text_r(r, VKR_MONO_BOLD, 24, rx, 14, HEX(0xb45cff), b);
+        rx -= ui_text_w(r, VKR_MONO_BOLD, 24, b) + 28;
+    }
     /* owned Lantern Powers */
     {
         struct lm_player const *p = &g->player;
@@ -751,7 +793,7 @@ draw_hud(struct app *a, struct vkr *r)
         float pulse = low ? 0.65f + 0.35f * (float)lm_sin(t * 9) : 1.0f;
         snprintf(b, sizeof(b), low ? "Low Air %d%%" : "Air %d%%", air);
         ui_text(r, VKR_MONO_BOLD, 26, 52, 1031, low ? HEXA(C_PINK, pulse) : HEX(C_AMBER), b);
-        float bx = 52 + (low ? 214.0f : 150.0f), bw = 520, by = 1040;
+        float bx = 52 + (low ? 214.0f : 150.0f), bw = 360, by = 1040;
         vkr_rrect(r, bx, by, bw, 18, 5, HEXA(C_PANEL2, 0.95));
         float fillw = bw * (float)lm_clamp(g->air / MAX_AIR, 0, 1);
         if (fillw > 1) {
@@ -779,18 +821,16 @@ draw_hud(struct app *a, struct vkr *r)
         x -= ui_text_w(r, VKR_MONO_BOLD, 26, b) + 10;
         ui_text_r(r, VKR_MONO, 22, x, 1034, HEX(C_MUTED), "Relic Pts");
         x -= ui_text_w(r, VKR_MONO, 22, "Relic Pts") + 30;
-        for (int p = PERK_COUNT - 1; p >= 0; p--) {
-            if (g->perks[p] <= 0)
-                continue;
-            if (x < 820) /* keep clear of the Air bar */
-                break;
-            if (g->perks[p] > 1)
-                snprintf(b, sizeof(b), "%s x%d", lm_perks[p].short_label, g->perks[p]);
-            else
-                snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
-            ui_text_r(r, VKR_SANS_BOLD, 22, x, 1034, HEX(lm_perks[p].accent), b);
-            x -= ui_text_w(r, VKR_SANS_BOLD, 22, b) + 24;
+    }
+    {
+        /* the room's name, centred between the air bar and the shop count */
+        float size = 36, w = ui_text_w(r, VKR_DISPLAY_SEMI, size, g->cavern.name);
+        if (w > 650) {
+            size *= 650 / w;
+            w = ui_text_w(r, VKR_DISPLAY_SEMI, size, g->cavern.name);
         }
+        vkr_rrect(r, 1010 - w / 2 - 22, 1022, w + 44, 52, 10, HEXA(0x000000, 0.82));
+        ui_text_c(r, VKR_DISPLAY_SEMI, size, 1010, 1028 + (36 - size) * 0.5f, HEX(C_YELLOW), g->cavern.name);
     }
 
     /* first seconds: how to play */
@@ -827,7 +867,7 @@ draw_pause(struct app *a, struct vkr *r)
     struct lm_game const *g = &a->g;
     char b[96];
     draw_dim(r, 0.66f);
-    float pw = 760, ph = 690, px = (VKR_W - pw) / 2, py = 180;
+    float pw = 760, ph = 762, px = (VKR_W - pw) / 2, py = 150;
     ui_panel(r, px, py, pw, ph, 28, 0.94f);
     snprintf(b, sizeof(b), "Cavern %02d \xc2\xb7 %s", g->depth, g->cavern.name);
     ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(C_AMBER), b);
@@ -835,8 +875,8 @@ draw_pause(struct app *a, struct vkr *r)
     ui_spectrum_rule(r, px + 160, py + 184, pw - 320, 5, 0.9f);
     ui_text_c(r, VKR_MONO, 24, 960, py + 206, HEX(C_MUTED), "Your progress is saved after every cavern");
 
-    static char const *const labels[4] = {"Resume Expedition", "Settings", "Sound: On", "Save & Quit to Title"};
-    for (int i = 0; i < 4; i++) {
+    static char const *const labels[5] = {"Resume Expedition", "Settings", "Sound: On", "How to Play", "Save & Quit to Title"};
+    for (int i = 0; i < 5; i++) {
         char lab[48];
         snprintf(lab, sizeof(lab), "%s", i == 2 ? (a->set.muted ? "Sound: Off" : "Sound: On") : labels[i]);
         ui_button(r, px + 70, py + 270 + i * 88, pw - 140, 72, lab, a->pause_sel == i, i == 0, a->row_anim[i], a->now);
@@ -910,7 +950,7 @@ draw_shop(struct app *a, struct vkr *r)
     ui_text_r(r, VKR_MONO, 22, 1840, 22, HEX(C_DIM), "Relic Points");
     ui_text_r(r, VKR_MONO_BOLD, 42, 1840, 46, HEX(C_YELLOW), b);
     if (lm_shop_discount(g) > 0) {
-        snprintf(b, sizeof(b), "Regulars' discount: %d%% off everything", lm_shop_discount(g));
+        snprintf(b, sizeof(b), "Regulars' discount: %d%% off supplies and gear", lm_shop_discount(g));
         ui_text_r(r, VKR_SANS_BOLD, 22, 1840, 98, HEX(C_GREEN), b);
     }
     for (int i = g->max_hearts - 1; i >= 0; i--)
@@ -1200,12 +1240,13 @@ adjust_setting(struct app *a, int row, int dir)
 }
 
 #include "lm_scores.inc"
+#include "lm_help.inc"
 
 static void
 update_title(struct app *a, struct app_input const *in)
 {
     uint32_t p = in->pressed;
-    char const *labels[5];
+    char const *labels[TM_COUNT];
     int count = title_menu(a, labels);
     if (a->title_sel >= count)
         a->title_sel = 0;
@@ -1227,6 +1268,10 @@ update_title(struct app *a, struct app_input const *in)
             save_all(a);
             start_run(a);
         }
+        break;
+    case TM_HELP:
+        lm_audio_ui_select();
+        open_help(a);
         break;
     case TM_SCORES:
         lm_audio_ui_select();
@@ -1259,7 +1304,7 @@ static void
 update_pause(struct app *a, struct app_input const *in)
 {
     uint32_t p = in->pressed;
-    nav(a, in, &a->pause_sel, 4);
+    nav(a, in, &a->pause_sel, 5);
     if (p & PAD_R3)
         toggle_mute(a);
     if ((p & (PAD_OPTIONS | PAD_CIRCLE)) || ((p & PAD_CROSS) && a->pause_sel == 0)) {
@@ -1279,6 +1324,9 @@ update_pause(struct app *a, struct app_input const *in)
             toggle_mute(a);
             break;
         case 3:
+            open_help(a);
+            break;
+        case 4:
             lm_set_paused(&a->g, true);
             save_run(a);
             to_title(a);
@@ -1346,7 +1394,7 @@ update_shop(struct app *a, struct app_input const *in)
             else if (it->tier == TIER_SPECIAL)
                 snprintf(a->shop_line, sizeof(a->shop_line), "Ha! The %s! I keep those for my best customers. Don\xe2\x80\x99t waste it!", it->name);
             else if (a->shop_sel == SHOP_EXTRA_LIFE)
-                snprintf(a->shop_line, sizeof(a->shop_line), "A spare lantern! That\xe2\x80\x99s %d lives now. Try to use fewer of them.", a->g.lives);
+                snprintf(a->shop_line, sizeof(a->shop_line), "A spare lantern! That\xe2\x80\x99s %d lives now. The next one will cost you more.", a->g.lives);
             else if (it->tier == TIER_POWER)
                 snprintf(a->shop_line, sizeof(a->shop_line), "The %s is yours. Mind the clock down there, it won\xe2\x80\x99t wait for you!", it->name);
             else if (it->tier == TIER_MASTERWORK)
@@ -1495,6 +1543,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     case SC_SCORES:
         update_scores(a, in);
         break;
+    case SC_HELP:
+        update_help(a, in);
+        break;
     }
 
     /* the simulation: runs in play (and animates behind overlays); paused states are frozen inside */
@@ -1538,8 +1589,8 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
 
     /* row highlight animation per screen */
     switch (a->screen) {
-    case SC_TITLE: anim_rows(a, a->menu_anim, 5, a->title_sel, dt); break;
-    case SC_PAUSE: anim_rows(a, a->row_anim, 4, a->pause_sel, dt); break;
+    case SC_TITLE: anim_rows(a, a->menu_anim, TM_COUNT, a->title_sel, dt); break;
+    case SC_PAUSE: anim_rows(a, a->row_anim, 5, a->pause_sel, dt); break;
     case SC_OVER:
     case SC_CONTINUE: anim_rows(a, a->row_anim, 2, a->over_sel, dt); break;
     case SC_SETTINGS: anim_rows(a, a->row_anim, SET_COUNT, a->set_sel, dt); break;
@@ -1576,6 +1627,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         break;
     case SC_CONTINUE:
         draw_continue(a, r);
+        break;
+    case SC_HELP:
+        draw_help(a, r);
         break;
     case SC_NAME:
         draw_name(a, r);

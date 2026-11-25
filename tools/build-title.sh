@@ -19,7 +19,8 @@ work="$root/build/lantern"
 title=PPSA58001
 param="$root/sce_sys/param-lantern.json"
 
-for f in "$archive" "$tool" "$sdk_root/bin/prospero-lld" "$PROJ/assets/art/title.jpg" "$PROJ/assets/brand/icon0.png"; do
+for f in "$archive" "$tool" "$sdk_root/bin/prospero-lld" "$PROJ/assets/art/title.jpg" "$PROJ/assets/music/theme.wav" \
+    "$PROJ/assets/brand/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/pic.dds" "$PROJ/assets/brand/snd0.at9"; do
     [[ -e $f ]] || { echo "missing $f" >&2; exit 2; }
 done
 
@@ -97,15 +98,17 @@ echo "link ok, no null imports"
 
 app="$root/dist/$title"
 rm -rf -- "$app"
-mkdir -p "$app/sce_sys" "$app/sce_module" "$app/assets/fonts" "$app/assets/art"
+mkdir -p "$app/sce_sys" "$app/sce_module" "$app/assets/fonts" "$app/assets/art" "$app/assets/music"
 "$tool" self --sign --in "$work/eboot.elf" --out "$app/eboot.bin" --magic "$fself_magic"
 cp "$param" "$app/sce_sys/param.json"
 cp "$PROJ"/assets/fonts/*.ttf "$PROJ"/assets/fonts/LICENSES.txt "$app/assets/fonts/"
-cp "$PROJ"/assets/art/*.jpg "$app/assets/art/"
-# Own artwork only (icon0 + pic1 hover background), pic1.png is pic1_base.png with the version stamped on by tools/stamp_pic1.py (run it after bumping LM_VERSION).
-cp "$PROJ/assets/brand/icon0.png" "$PROJ/assets/brand/pic1.png" "$app/sce_sys/"
-# Hover music is ATRAC9 only: tools/make_music.py writes the WAV, convert it with at9tool to assets/brand/snd0.at9.
-[[ -f $PROJ/assets/brand/snd0.at9 ]] && cp "$PROJ/assets/brand/snd0.at9" "$app/sce_sys/snd0.at9" || true
+cp "$PROJ"/assets/art/*.jpg "$PROJ"/assets/art/*.png "$app/assets/art/"
+cp "$PROJ/assets/music/theme.wav" "$app/assets/music/"
+# Home screen presentation, made by tools/make_presentation.py (run it after changing the version or the theme):
+# pic0.dds = background while the icon is highlighted, pic1.dds/.png = launch background, snd0.at9 = highlight music.
+cp "$PROJ/assets/brand/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/snd0.at9" "$app/sce_sys/"
+cp "$PROJ/assets/brand/pic.dds" "$app/sce_sys/pic0.dds"
+cp "$PROJ/assets/brand/pic.dds" "$app/sce_sys/pic1.dds"
 [[ -f $root/runtime/libc.prx ]] || bash "$root/tools/rebuild-libc.sh"
 (cd "$root/runtime" && sha256sum --check --strict --quiet libc.prx.sha256)
 cp "$root/runtime/libc.prx" "$app/sce_module/libc.prx"

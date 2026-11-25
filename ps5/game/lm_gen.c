@@ -61,7 +61,7 @@ rng_chance(struct rng *r, double p)
 
 enum { OP_FILL, OP_LADDER, OP_MOVER, OP_START, OP_EXIT, OP_KEY, OP_GEM, OP_CHEST, OP_FOE };
 struct op { uint8_t kind, arg, c0, r0, c1, r1; };
-struct level { char const *name, *hint; int biome; struct op const *ops; int n; };
+struct level { char const *name, *hint; int biome, air; struct op const *ops; int n; };
 
 #include "lm_levels.inc"
 
@@ -179,10 +179,12 @@ add_collect(struct lm_cavern *cv, int kind, int powerup, int variant, double x, 
 static int
 roll_chest(struct rng *rng)
 {
-    /* weights out of 100: shield 20, tea 22, spring 15, magnet 13, slow 12, jackpot 10, a spare life 6, a continue 2 */
+    /* weights out of 100. 59 are good: shield 12, tea 12, spring 8, magnet 7, slow 7, treasure 11, a life 1, a
+       continue 1. 41 are nasty: lead boots 11, muddle 10, air leak 11, something that follows you 9. */
     static int const weight[CHEST_KINDS] = {
-        [PU_SPRING_BOOTS] = 15, [PU_LANTERN_SHIELD] = 20, [PU_TEA_THERMOS] = 22, [PU_STARLIGHT_MAGNET] = 13,
-        [PU_CLOCKWORK_SLOW] = 12, [CHEST_JACKPOT] = 10, [CHEST_LIFE] = 6, [CHEST_CONTINUE] = 2};
+        [PU_SPRING_BOOTS] = 8, [PU_LANTERN_SHIELD] = 12, [PU_TEA_THERMOS] = 12, [PU_STARLIGHT_MAGNET] = 7,
+        [PU_CLOCKWORK_SLOW] = 7, [CHEST_JACKPOT] = 11, [CHEST_LIFE] = 1, [CHEST_CONTINUE] = 1,
+        [CHEST_LEAD] = 11, [CHEST_MUDDLE] = 10, [CHEST_LEAK] = 11, [CHEST_GHOUL] = 9};
     int n = rng_pick(rng, 100);
     for (int i = 0; i < CHEST_KINDS; i++) {
         n -= weight[i];
@@ -199,8 +201,9 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
     struct rng rng, luck;
     char key[160];
     int foes = 0, gems = 0;
-    /* the foe budget is the difficulty curve: one in the first cavern, about ten by cavern seventeen */
-    int budget = (int)lm_min(12, 1 + lm_floor((depth - 1) * 0.55));
+    /* the foe budget is the difficulty curve: gentle for two caverns, four from the third, then a steady climb */
+    static int const early[10] = {1, 2, 4, 4, 5, 5, 6, 7, 7, 8};
+    int budget = depth <= 10 ? early[depth < 1 ? 0 : depth - 1] : (int)lm_min(12, 8 + lm_floor((depth - 10) * 0.4));
 
     snprintf(key, sizeof(key), "cavern::%d::%d", index, depth); /* the same for every run */
     rng_seed(&rng, key);
@@ -209,6 +212,7 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
     memset(cv, 0, sizeof(*cv));
     cv->depth = depth;
     cv->biome = lv->biome;
+    cv->air_secs = lv->air;
     snprintf(cv->name, sizeof(cv->name), "%s", lv->name);
     snprintf(cv->hint, sizeof(cv->hint), "%s", lv->hint);
 
@@ -279,13 +283,16 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
             add_collect(cv, COL_RELIC, 0, gems++ % 3, x, y + TILE_SIZE * 0.48, rng_next(&rng) * LM_PI * 2);
             break;
         case OP_CHEST:
-            /* luck: about one cavern in three has its chest */
+            /* luck: a little over half the caverns have their chest */
             #ifdef LM_ALL_CHESTS
             if (true) {
 #else
-            if (depth >= 2 && rng_chance(&luck, 0.35)) {
+            if (depth >= 2 && rng_chance(&luck, 0.55)) {
 #endif
                 int prize = roll_chest(&luck);
+#ifdef LM_ALL_CHESTS
+                prize = CHEST_JACKPOT; /* the level checker tests routes, so no curses */
+#endif
                 add_collect(cv, COL_CHEST, prize, 0, x, y + TILE_SIZE * 0.6, rng_next(&luck) * LM_PI * 2);
             }
             break;
@@ -300,6 +307,22 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
         }
     }
 #undef COL
+
+    /* the gem furthest from the start is an air bottle instead, so topping up always means a detour */
+    {
+        struct lm_collectable *far = NULL;
+        double best = -1;
+        for (int i = 0; i < cv->n_collect; i++) {
+            struct lm_collectable *c = &cv->collect[i];
+            double dx = c->x - cv->spawn.x, dy = c->y - cv->spawn.y, d = dx * dx + dy * dy;
+            if (c->kind == COL_RELIC && d > best) {
+                best = d;
+                far = c;
+            }
+        }
+        if (far)
+            far->kind = COL_AIR;
+    }
 
     /* ambient hanging brass lanterns */
     static int const lantern_cols[5] = {5, 11, 16, 21, 26};

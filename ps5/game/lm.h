@@ -16,8 +16,8 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.7"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 8
+#define LM_VERSION "0.8"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 13
 #define START_LIVES 5
 #define MAX_CONTINUES 3
 #define WORLD_SIZE 10 /* caverns to a world */
@@ -32,9 +32,9 @@
 #define MOVE_SPEED 218.0
 #define MOVE_ACCEL_GROUND 1950.0
 #define MOVE_ACCEL_AIR 1280.0
-#define JUMP_VELOCITY (-505.0)
-#define SPRING_JUMP_VELOCITY (-585.0)
-#define DOUBLE_JUMP_VELOCITY (-455.0)
+#define JUMP_VELOCITY (-465.0) /* climbs 3 rows with little to spare; the maps rely on that */
+#define SPRING_JUMP_VELOCITY (-540.0)
+#define DOUBLE_JUMP_VELOCITY (-420.0)
 #define JUMP_CUT_MULTIPLIER 0.52
 #define COYOTE_TIME 0.115
 #define JUMP_BUFFER_TIME 0.125
@@ -44,8 +44,17 @@
 #define CRUMBLE_RESPAWN_TIME 4.2
 #define MAX_AIR 100.0
 #define CLIMB_SPEED 125.0
+/* Landing further than this below the highest point of a fall costs a life. A jump rises about 3 rows, so a jump
+   off a ledge 5 rows up is safe, as is stepping off one 8 rows up. */
+#define MAX_SAFE_FALL (TILE_SIZE * 8.5)
 #define MOVER_THICKNESS 10
-#define BASE_AIR_DRAIN_PER_SEC 1.15 /* the built caverns involve waiting for platforms */
+#define AIR_BOTTLE 30.0 /* the one thing in a cavern that tops the air up; each map sets how long a full tank lasts */
+#define LIFE_PRICE_STEP 4000 /* each spare life bought makes the next one this much dearer */
+/* cursed chests */
+#define LEAD_TIME 12.0
+#define LEAD_SPEED 0.6
+#define MUDDLE_TIME 10.0
+#define LEAK_AIR 22.0
 
 enum lm_tile { T_EMPTY, T_SOLID, T_ONE_WAY, T_CONVEYOR_LEFT, T_CONVEYOR_RIGHT, T_CRUMBLE, T_BRAMBLE, T_PIT };
 
@@ -101,9 +110,11 @@ extern struct lm_shop_def const lm_shop[SHOP_COUNT];
 
 /* ----------------------------------------------------------------- cavern */
 
-enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST };
+enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST, COL_AIR };
 /* what a chest holds: one of enum lm_powerup, or one of these */
-enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_CONTINUE, CHEST_KINDS };
+enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_CONTINUE,
+       CHEST_LEAD, CHEST_MUDDLE, CHEST_LEAK, CHEST_GHOUL, /* the nasty ones */
+       CHEST_KINDS };
 
 struct lm_collectable {
     int kind;       /* enum lm_collect_kind */
@@ -139,6 +150,7 @@ struct lm_mover {
 struct lm_cavern {
     int depth;
     int biome;
+    double air_secs; /* how long a full tank lasts here */
     char name[96];
     char hint[48];
     uint8_t tiles[GRID_ROWS][GRID_COLS];
@@ -172,6 +184,8 @@ struct lm_player {
     int on_conveyor;
     bool climbing;
     int rider; /* moving platform being stood on, -1 for none */
+    double fall_top; /* highest point since the miner last had hold of something */
+    double lead, muddle; /* seconds left of a cursed chest: slowed down, left and right swapped */
     bool has_shield;
     double spring, magnet, slow;
     struct { double x, y; } scarf[4];
@@ -224,6 +238,7 @@ struct lm_game {
     bool next_shield;
     int lives;           /* lives left, this one included */
     int continues, continues_bought;
+    int lives_bought;    /* spare lives bought this run: sets the price of the next */
     int world_score;     /* score on entering this world: a continue goes back to it */
     bool flawless;       /* no life lost in this world yet: finishing it earns a continue */
     bool flawless_award; /* set when that continue has just been handed out */
@@ -291,6 +306,7 @@ void lm_fmt_int(char *buf, size_t n, long v); /* 12,345 (toLocaleString) */
 /* ------------------------------------------------------------------- audio */
 
 void lm_audio_init(void);
+bool lm_audio_load_title_track(char const *path);
 void lm_audio_pull(int16_t *lr, size_t frames);
 void lm_audio_set_muted(bool muted);
 bool lm_audio_is_muted(void);
@@ -325,5 +341,12 @@ struct lm_world_opts {
     bool bloom;          /* extra soft glow */
 };
 void lm_draw_world(struct vkr *r, struct lm_game const *g, struct lm_world_opts const *o);
+/* One sprite from the game, centred at (x,y) at `scale` virtual pixels per world pixel: for the How to Play key. */
+enum lm_icon {
+    ICON_MINER, ICON_KEY, ICON_GEM_CUP, ICON_GEM, ICON_AIR, ICON_CHEST, ICON_PORTAL_SHUT, ICON_PORTAL_OPEN, ICON_BEETLE,
+    ICON_CHARGER, ICON_BOUNCER, ICON_BAT, ICON_PISTON, ICON_WISP, ICON_SPITTER, ICON_STALKER, ICON_SPARK, ICON_SPIKES,
+    ICON_POOL, ICON_CRUMBLE, ICON_CONVEYOR, ICON_LADDER, ICON_LIFT, ICON_FALL
+};
+void lm_draw_icon(struct vkr *r, int icon, float x, float y, float scale, double time);
 /* World coordinates of the title-screen emblem etc. are drawn by the app. */
 

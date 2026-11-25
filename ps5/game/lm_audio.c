@@ -1,15 +1,19 @@
 /*
 ** Lantern Miner: audio. A software port of audio.ts (Web Audio): the same oscillator waveforms, envelopes, note
 ** tables, warm low-pass on the music bus and the same sound effects, mixed on the platform's audio thread.
+** The title screen plays a recorded theme (assets/music/theme.wav) instead of the synth.
 ** 48 kHz stereo. The game thread only queues voices; the audio thread renders.
 */
 #include "lm.h"
 
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SR 48000.0
 #define MAX_VOICES 72
+#define TRACK_GAIN 0.4 /* the theme is mastered much louder than the synth and effects */
 
 enum { BUS_MUSIC, BUS_SFX };
 enum { W_SINE, W_SQUARE, W_TRIANGLE, W_SAW };
@@ -43,6 +47,10 @@ static struct {
     int step;
     double tempo;
     uint32_t noise;
+    /* recorded title theme: interleaved 48 kHz stereo */
+    int16_t *track;
+    size_t track_frames, track_pos;
+    double track_fade; /* 0..1, ramps so leaving the title does not click */
     bool ready;
 } A;
 
@@ -98,6 +106,57 @@ lm_audio_init(void)
     A.noise = 0x2545F491u;
     lowpass(&A.music_lp, 1320.0, 1.1);
     A.ready = true;
+}
+
+/* ------------------------------------------------------------- title theme */
+
+static uint32_t
+le32(unsigned char const *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/* Loads a 48 kHz 16-bit stereo WAV. Call after lm_audio_init() and before the audio thread starts.
+   On any failure the title keeps the synth tune. */
+bool
+lm_audio_load_title_track(char const *path)
+{
+    unsigned char h[24];
+    bool fmt_ok = false;
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return false;
+    if (fread(h, 1, 12, f) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4))
+        goto fail;
+    while (fread(h, 1, 8, f) == 8) {
+        uint32_t size = le32(h + 4);
+        long skip = (long)size + (long)(size & 1);
+        if (!memcmp(h, "fmt ", 4)) {
+            if (size < 16 || fread(h + 8, 1, 16, f) != 16)
+                goto fail;
+            /* PCM, 2 channels, 48000 Hz, 16 bits */
+            fmt_ok = h[8] == 1 && h[9] == 0 && h[10] == 2 && le32(h + 12) == 48000 && h[22] == 16;
+            skip -= 16;
+        } else if (!memcmp(h, "data", 4)) {
+            size_t frames = size / 4;
+            if (!fmt_ok || !frames)
+                goto fail;
+            int16_t *pcm = malloc(frames * 4);
+            if (!pcm || fread(pcm, 4, frames, f) != frames) {
+                free(pcm);
+                goto fail;
+            }
+            fclose(f);
+            A.track = pcm;
+            A.track_frames = frames;
+            return true;
+        }
+        if (fseek(f, skip, SEEK_CUR) != 0)
+            goto fail;
+    }
+fail:
+    fclose(f);
+    return false;
 }
 
 /* ------------------------------------------------------------------ voices */
@@ -227,7 +286,7 @@ step_samples(void)
 static void
 tick_music(int mode, int step)
 {
-    if (A.muted)
+    if (A.muted || (mode == MUSIC_TITLE && A.track))
         return;
     if (mode == MUSIC_CAVERN) {
         int idx = step % 64;
@@ -261,6 +320,8 @@ lm_audio_set_music_mode(int mode, double tempo)
     }
     A.mode = mode;
     A.timer_on = false;
+    if (mode == MUSIC_TITLE)
+        A.track_pos = 0; /* the theme starts from the top each time you return to the title */
     if (mode != MUSIC_NONE) {
         A.step = 0;
         A.timer_on = true;
@@ -300,7 +361,8 @@ lm_audio_pull(int16_t *lr, size_t frames)
     }
     /* The voice list is locked once per chunk (not twice per sample): a chunk runs up to the next sequencer step
        or 256 samples, whichever is first. */
-    double mus[256], sfxb[256];
+    double mus[256], sfxb[256], trk[256][2];
+    double const fade_step = 1.0 / (0.08 * SR);
     size_t f = 0;
     while (f < frames) {
         size_t n = frames - f;
@@ -354,6 +416,17 @@ lm_audio_pull(int16_t *lr, size_t frames)
             }
             mus[k] = music;
             sfxb[k] = sfx;
+            trk[k][0] = trk[k][1] = 0;
+            if (A.track) {
+                A.track_fade = lm_clamp(A.track_fade + (A.mode == MUSIC_TITLE ? fade_step : -fade_step), 0.0, 1.0);
+                if (A.track_fade > 0) {
+                    double g = A.track_fade * (TRACK_GAIN / 32768.0);
+                    trk[k][0] = A.track[A.track_pos * 2] * g;
+                    trk[k][1] = A.track[A.track_pos * 2 + 1] * g;
+                    if (++A.track_pos >= A.track_frames)
+                        A.track_pos = 0;
+                }
+            }
         }
         pthread_mutex_unlock(&A.lock);
 
@@ -362,10 +435,9 @@ lm_audio_pull(int16_t *lr, size_t frames)
             double sfx = sfxb[k] * 0.42 * A.sfx_vol;
             A.master += (A.master_target - A.master) * smooth;
             double out = (music + sfx) * A.master * 2.2; /* console loudness: the web version leaves volume to the browser */
-            out = lm_clamp(out, -1.0, 1.0);
-            int16_t s16 = (int16_t)(out * 32000.0);
-            lr[(f + k) * 2] = s16;
-            lr[(f + k) * 2 + 1] = s16;
+            double level = A.music_vol * (A.master / 0.72); /* the theme follows the music slider and mute */
+            for (int c = 0; c < 2; c++)
+                lr[(f + k) * 2 + c] = (int16_t)(lm_clamp(out + trk[k][c] * level, -1.0, 1.0) * 32000.0);
         }
         f += n;
     }

@@ -116,7 +116,16 @@ main(int argc, char **argv)
 
     /* title */
     frames(200, 0, 0, "01_title.png"); /* past the loading splash */
-    frames(2, PAD_DOWN, 0, NULL); /* no save yet: New Game, High Scores, Settings, Exit */
+    frames(2, PAD_DOWN, 0, NULL); /* no save yet: New Game, How to Play, High Scores, Settings, Exit */
+    frames(2, PAD_CROSS, 0, NULL);
+    for (int p = 0; p < 6; p++) {
+        char name[64];
+        snprintf(name, sizeof(name), "02_help_%d.png", p + 1);
+        frames(30, 0, 0, name);
+        frames(2, PAD_R1, 0, NULL);
+    }
+    frames(2, PAD_CIRCLE, 0, NULL);
+    frames(2, PAD_DOWN, 0, NULL);
     frames(2, PAD_CROSS, 0, NULL);
     frames(40, 0, 0, "03_high_scores.png");
     frames(2, PAD_CIRCLE, 0, NULL);
@@ -220,7 +229,7 @@ main(int argc, char **argv)
         struct lm_game *gm = game();
         int depth = gm->depth, score = gm->score, lives = gm->lives, pts = gm->relic_points;
         frames(2, PAD_OPTIONS, 0, NULL);
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 4; i++)
             frames(2, PAD_DOWN, 0, NULL);
         frames(2, PAD_CROSS, 0, NULL);
         frames(40, 0, 0, "15_title_continue.png");

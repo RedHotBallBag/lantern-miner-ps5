@@ -3,30 +3,41 @@
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cosy cavern platformer for jailbroken PS5 · <b>Beta v0.7</b> · <code>PPSA58001</code></p>
+<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.8</b> (Build 13) · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
-I grew up playing old ZX Spectrum games like *Manic Miner* and I still love them, so I made my own for the PS5. Same simple,
-hard but fair feel, with a warmer look and a few extras. It's written in C with Vulkan.
+I wanted to make a game like *Manic Miner* and *Jet Set Willy*, as a homage to Matthew Smith. I grew up with those old ZX
+Spectrum games and I still love them. So this is a proper old-school one: simple to pick up, hard to master, and the sort
+of game that makes you want to rage quit, then have one more go.
 
-## How to play
+It's written in C with Vulkan.
 
-Grab all the keys, get to the portal and head down to the next cavern. Watch your air, and watch out for the guardians.
+## It's a beta
 
-- 23 hand-built caverns so far, heading for 50 across 5 worlds
-- World 1 is finished, with ten caverns from gentle to tricky
-- Ladders, lifts, moving platforms, conveyors, crumbling ledges and deep water
-- Lucky chests with a surprise inside
-- Old Barnaby's shop every 5th cavern, with new stock each visit
-- You get 5 lives, with 2 hearts each
-- Continues are rare: buy one, find one, or clear a whole world without losing a life
-- Your game saves as you go
-- Top 10 high score table
+So far there's **one finished world** (ten caverns) plus **13 extra caverns** after it. The plan is 50 caverns across five
+worlds, with water, ice, wind and fire still to come. I'll keep building it, so let me know if anything's odd or unfair.
 
-![Cavern one](docs/screenshots/04_play_cavern1.png)
+## What you're in for
+
+Grab all the keys, get to the door and head down to the next cavern. Sounds easy. It isn't.
+
+- **Your air runs out**, and quickly. There's only one air bottle in each cavern
+- **Mind the drop.** Fall too far and you lose a life
+- **Eight kinds of guardian**, from clockwork beetles to a stalker that follows you through walls
+- Ladders, lifts, moving platforms, conveyors, crumbling ledges, brambles and deep water
+- **Chests are a gamble.** Some are treats, some give you lead boots, muddle your controls, leak your air or set something on you
+- **Old Barnaby's shop** every 5th cavern, with new stock each visit
+- **Lives are a luxury.** You get 5, with 2 hearts each, and buying more costs a fortune
+- Continues are rare: buy one, find one, or clear a whole world without dying
+- Daft room names in the old tradition, like *Pulley Inspector Found in Marmalade*
+- Your game saves as you go, and there's a top 10 high score table
+
+Stuck? There's a **How to Play** screen on the title and pause menus, with a key to everything.
+
 ![The Pulley House](docs/screenshots/level_09.png)
-![The Great Hearth](docs/screenshots/level_10.png)
+![Tea With the Mayor's Spare Head](docs/screenshots/level_10.png)
+![The guardians](docs/screenshots/02_help_3.png)
 ![The shop](docs/screenshots/09_shop.png)
 
 ## Controls
@@ -39,18 +50,23 @@ Grab all the keys, get to the portal and head down to the next cavern. Watch you
 | Pause | Options |
 | Mute | R3 |
 | Menus | ✕ select, ○ back |
-| Switch shop shelf | L1 / R1 |
+| Switch shop shelf or help page | L1 / R1 |
 | Leave shop | Options |
 
 ## Install
 
-1. Download `LanternMiner-v0.7.0-beta.zip` from **Releases** and unzip it.
+1. Download the latest zip from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
-3. Launch it and enjoy.
+3. Launch it and enjoy (or don't, and throw the pad).
 
 Saves live in `/data/lantern-miner/`.
 
-It's still a beta, so let me know if anything's odd. Water, ice, wind and fire worlds are on the way.
+## Buy me a coffee
+
+If you're enjoying it, or you just want me to hurry up with World 2, you can
+[buy me a coffee](https://www.buymeacoffee.com/superfurry). Scan the code or click it.
+
+<a href="https://www.buymeacoffee.com/superfurry"><img src="docs/buy-me-a-coffee.png" width="220" alt="Buy me a coffee QR code"></a>
 
 ## Building
 
@@ -60,10 +76,13 @@ You'll need WSL (Ubuntu), the PS5 payload SDK and the PS5 Vulkan toolchain. See 
 wsl -d Ubuntu -- bash tools/build-title.sh
 ```
 
+After changing the version or the theme tune, run `python tools/make_presentation.py` to remake the home screen art and music.
+
 ## Credits
 
 - Made by **RedHotBallBag**
-- Inspired by **Manic Miner** by Matthew Smith (1983). This is a fan homage and isn't affiliated with or endorsed by its makers
+- Inspired by **Manic Miner** and **Jet Set Willy** by Matthew Smith. This is a fan homage and isn't affiliated with or
+  endorsed by their makers
 - Fonts: Fraunces, DM Sans and JetBrains Mono (SIL Open Font Licence, see `assets/fonts/`)
 - `stb_image.h` and `stb_truetype.h` by Sean Barrett
 - PS5 display and Vulkan start-up code adapted from **PS5 Vulkan** by Mihawk-99 (GPL-3.0-or-later). Builds also use its RADV
