@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="assets/brand/icon0.png" width="180" alt="Lantern Miner icon">
+  <img src="sce_sys/icon0.png" width="180" alt="Lantern Miner icon">
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9</b> (Build 14) · <code>PPSA58001</code></p>
+<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9.1</b> (Build 15) · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
@@ -55,7 +55,7 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 
 ## Install
 
-1. Download `LanternMiner-v0.9.0-beta.zip` from **Releases** and unzip it.
+1. Download `LanternMiner-v0.9.1-beta.zip` from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
 3. Launch it and enjoy (or don't, and throw the pad).
 

@@ -5,7 +5,7 @@
 The code is Copyright (C) 2026 RedHotBallBag and licensed under the **GNU General Public Licence, version 3 or later**
 (see `LICENSE`). It comes with no warranty.
 
-The artwork (`assets/art`, `assets/brand`), the title music (`assets/music`, `assets/brand/snd0.at9`), the screenshots
+The artwork (`assets/art`, `assets/brand`, `sce_sys/icon0.png`), the title music (`assets/music`, `assets/brand/snd0.at9`), the screenshots
 and the Lantern Miner name are Copyright (C) 2026 RedHotBallBag and are not covered by the GPL. You're welcome to pass
 them on unchanged as part of the game. The buy me a coffee code and logo are only there to point at my page.
 

@@ -18,8 +18,8 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.9"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 14
+#define LM_VERSION "0.9.1"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 15
 #define START_LIVES 5
 #define MAX_CONTINUES 3
 #define WORLD_SIZE 10 /* caverns to a world */

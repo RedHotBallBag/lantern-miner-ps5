@@ -19,16 +19,14 @@ native="$root/tooling/native"
 tool="$root/build/host/ps5-native-tool"
 work="$root/build/lantern"
 title=PPSA58001
-param="$root/sce_sys/param-lantern.json"
+param="$PROJ/sce_sys/param.json" # raise contentVersion with every release
 
 for f in "$archive" "$tool" "$sdk_root/bin/prospero-lld" "$PROJ/assets/art/title.jpg" "$PROJ/assets/music/theme.wav" \
-    "$PROJ/assets/brand/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/pic.dds" "$PROJ/assets/brand/snd0.at9"; do
+    "$PROJ/sce_sys/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/pic.dds" "$PROJ/assets/brand/snd0.at9"; do
     [[ -e $f ]] || { echo "missing $f" >&2; exit 2; }
 done
 
 export PS5_CLANG="${PS5_CLANG:-$(command -v clang)}"
-sed -e 's/99014/58001/g' -e 's/UP9000-PPSA58001_00-PS5VKRADV0000001/UP9000-PPSA58001_00-LANTERNMINER0001/' \
-    -e 's/PS5 Vulkan RADV/Lantern Miner/' "$root/sce_sys/param-radv.json" > "$param"
 grep -q '"titleId": "PPSA58001"' "$param" || { echo "param.json titleId not set" >&2; exit 2; }
 
 rm -rf "$work"; mkdir -p "$work/obj" "$work/stubs" "$work/gen"
@@ -109,7 +107,7 @@ cp "$PROJ"/assets/art/*.jpg "$PROJ"/assets/art/*.png "$app/assets/art/"
 cp "$PROJ/assets/music/theme.wav" "$app/assets/music/"
 # Home screen presentation, made by tools/make_presentation.py (run it after changing the version or the theme):
 # pic0.dds = background while the icon is highlighted, pic1.dds/.png = launch background, snd0.at9 = highlight music.
-cp "$PROJ/assets/brand/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/snd0.at9" "$app/sce_sys/"
+cp "$PROJ/sce_sys/icon0.png" "$PROJ/assets/brand/pic1.png" "$PROJ/assets/brand/snd0.at9" "$app/sce_sys/"
 cp "$PROJ/assets/brand/pic.dds" "$app/sce_sys/pic0.dds"
 cp "$PROJ/assets/brand/pic.dds" "$app/sce_sys/pic1.dds"
 [[ -f $root/runtime/libc.prx ]] || bash "$root/tools/rebuild-libc.sh"
