@@ -1,5 +1,10 @@
-/* High score table: name entry + table screens. Included by lm_app.c (it needs struct app and the UI helpers).
-** Saved to scores.cfg in the data dir: "last=NAME" then one "NAME|score|depth" line per entry, best first. */
+/*
+ * High scores: name entry and the table, included by lm_app.c. Saved in scores.cfg as
+ * "last=NAME" followed by one "NAME|score|depth" line per entry, best first.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
 #define HS_MAX 10
 #define HS_NAME 8

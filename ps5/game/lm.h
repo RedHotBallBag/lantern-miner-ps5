@@ -1,7 +1,9 @@
 /*
-** Lantern Miner: game core (C port of the TypeScript engine, generator and catalogs). Platform independent.
-** Simulation uses doubles and the same operation order as the web version so a seed builds the same cavern.
-*/
+ * Lantern Miner: the game itself. Nothing in here is PS5 specific.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -16,17 +18,17 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.8"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 13
+#define LM_VERSION "0.9"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 14
 #define START_LIVES 5
 #define MAX_CONTINUES 3
 #define WORLD_SIZE 10 /* caverns to a world */
 #define MAX_LIVES 9
 #define BASE_HEARTS 2 /* hits you can take before losing a life */
 #define SHIELD_CAVERNS 3 /* a bought Lantern Shield renews this many times */
-#define SHOP_INTERVAL 5 /* the web version had 10; power-ups are now only sold here, so the stall comes sooner */
+#define SHOP_INTERVAL 5 /* a shop every five caverns */
 
-/* "Cosy arcade" physics tuning (unchanged from the web version) */
+/* movement */
 #define GRAVITY 1180.0
 #define MAX_FALL_SPEED 560.0
 #define MOVE_SPEED 218.0
@@ -67,7 +69,7 @@ enum lm_perk {
     PERK_CRUMBLE_LIGHTFOOT, PERK_CHRONOMETER, PERK_COUNT
 };
 
-/* Shop catalog order (as in the web version). Items 0 and 1 are supplies; 2.. carry a perk. */
+/* shop items, in catalogue order; most of the early ones carry a perk */
 enum lm_shop_item {
     SHOP_KETTLE_BREW, SHOP_LANTERN_WARD, SHOP_CRUMBLE_LIGHTFOOT, SHOP_CONVEYOR_CLEATS, SHOP_BRASS_LANTERN,
     SHOP_GEM_RESONANCE, SHOP_FEATHERSTEP, SHOP_EXTRA_HEARTH, SHOP_CHRONOMETER,
@@ -300,8 +302,8 @@ struct lm_shop_status { bool can_buy; char status[48]; char owned[32]; bool is_o
 void lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *out);
 bool lm_shop_purchase(struct lm_game *g, int item);
 int lm_cavern_until_shop(struct lm_game const *g);
-double lm_rand(struct lm_game *g); /* Math.random() stand-in */
-void lm_fmt_int(char *buf, size_t n, long v); /* 12,345 (toLocaleString) */
+double lm_rand(struct lm_game *g); /* 0 to 1 */
+void lm_fmt_int(char *buf, size_t n, long v); /* 12,345 */
 
 /* ------------------------------------------------------------------- audio */
 
@@ -348,5 +350,4 @@ enum lm_icon {
     ICON_POOL, ICON_CRUMBLE, ICON_CONVEYOR, ICON_LADDER, ICON_LIFT, ICON_FALL
 };
 void lm_draw_icon(struct vkr *r, int icon, float x, float y, float scale, double time);
-/* World coordinates of the title-screen emblem etc. are drawn by the app. */
 

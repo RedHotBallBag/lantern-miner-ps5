@@ -1,7 +1,9 @@
 /*
-** Lantern Miner: cavern builder. The campaign is a fixed list of hand-designed maps (lm_levels.inc). The only thing
-** that differs between runs is luck: whether a cavern's chest turns up and what is in it (from the run's seed).
-*/
+ * Lantern Miner: builds a cavern from its hand-drawn map. Only the chest is down to luck.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm.h"
 
 #include <stdio.h>

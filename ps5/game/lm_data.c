@@ -1,7 +1,12 @@
-/* Lantern Miner: catalogs (biomes, power-ups, perks, Old Barnaby's shop). Ported 1:1 from constants.ts. */
+/*
+ * Lantern Miner: biomes, power-ups, perks and the shop list.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm.h"
 
-#define Q "\xe2\x80\x99" /* right single quotation mark, as in the web version */
+#define Q "\xe2\x80\x99" /* curly apostrophe */
 
 struct lm_biome const lm_biomes[BIOME_COUNT] = {
     [BIOME_TIMBER_HEARTH] = {

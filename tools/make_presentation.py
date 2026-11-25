@@ -1,3 +1,5 @@
+# Copyright (C) 2026 RedHotBallBag
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Makes the PS5 home screen presentation files in assets/brand. Run on Windows:
 
   python tools/make_presentation.py [path to at9tool.exe]

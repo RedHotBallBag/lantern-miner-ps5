@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Builds the whole app (renderer + game + UI) for the desktop with software Vulkan and takes scripted screenshots.
 #   wsl -d Ubuntu -- bash tools/host-app.sh [height]
 set -euo pipefail

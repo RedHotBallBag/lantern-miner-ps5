@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Compiles ps5/gfx/shaders/*.{vert,frag} to SPIR-V, validates them, and writes one C header with the arrays.
 #   gen-shaders.sh <out-dir>      (writes <out-dir>/spv_shaders.h)
 set -euo pipefail

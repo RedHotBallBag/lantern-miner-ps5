@@ -1,9 +1,10 @@
 /*
-** Lantern Miner PS5 renderer. See vkr.h.
-**
-** Structure follows the proven pieces of PS5 Vulkan's radv_smoke.c (Mihawk-99, GPL-3.0-or-later): commands loaded
-** through vkGetDeviceProcAddr, host-visible staging buffers, VK_KHR_synchronization2 barriers, dynamic rendering.
-*/
+ * Lantern Miner: the renderer (see vkr.h). The Vulkan set-up follows radv_smoke.c from PS5 Vulkan.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * Portions Copyright (C) 2026 Mihawk-99
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "vkr.h"
 
 #include <stdarg.h>

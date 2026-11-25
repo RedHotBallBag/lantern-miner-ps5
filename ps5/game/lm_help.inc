@@ -1,5 +1,10 @@
-/* How to Play: the instructions and the key to everything in the caverns. Included by lm_app.c.
-** Sprites are drawn by the same code the game uses (lm_draw_icon), so the key always matches what is on screen. */
+/*
+ * How to Play screens, included by lm_app.c. The sprites are drawn by the game itself
+ * (lm_draw_icon), so the key always matches what is on screen.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
 enum { HELP_BASICS, HELP_ITEMS, HELP_FOES, HELP_HAZARDS, HELP_CHESTS, HELP_SHOP, HELP_PAGES };
 

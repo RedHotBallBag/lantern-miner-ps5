@@ -1,6 +1,11 @@
-/* Proves every built cavern (and its mirror) can be finished, by playing it with the real engine: a best-first search
- * over button presses that collects each key in turn and then walks into the portal. Foes are removed, so this checks
- * the layout, not the difficulty. Development only: run tools/check-levels.sh. */
+/*
+ * Checks that every cavern and its mirror can be finished, and in the air allowed, by searching
+ * button presses with the real engine. Foes are left out, so it tests the layout, not the difficulty.
+ * Run it with tools/check-levels.sh.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -203,10 +208,41 @@ solve(int level, bool mirror, int depth)
         ok = false;
     }
     if (depth != 50) {
-        printf("  %s%s: route %.0f s, air %.0f s (%.0f s with the bottle)\n", g.cavern.name, mirror ? " (mirrored)" : "", at.t,
-               g.cavern.air_secs, g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR));
-        if (at.t > g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR)) {
-            printf("  not enough air\n");
+        /* again from the start, taking only the keys and the air bottle */
+        lm_init(&g, 1);
+        lm_start_run(&g, "CHECK-100");
+        g.depth = depth;
+        lm_build_level(level, mirror, "CHECK-100", depth, &g.cavern);
+        g.cavern.n_enemies = g.n_enemies = 0;
+        g.n_movers = g.cavern.n_movers;
+        memcpy(g.movers, g.cavern.movers, sizeof(g.movers));
+        g.player.x = g.cavern.spawn.x - 10;
+        g.player.y = g.cavern.spawn.y;
+        g.safe_x = g.player.x;
+        g.safe_y = g.player.y;
+        grab(&at);
+        memset(done, 0, sizeof(done));
+        for (;;) {
+            int best = -1;
+            double bd = 1e18;
+            for (int i = 0; i < g.cavern.n_collect; i++) {
+                int kind = g.cavern.collect[i].kind;
+                double d = lm_hypot(g.cavern.collect[i].x - at.p.x, g.cavern.collect[i].y - at.p.y);
+                if (!done[i] && (kind == COL_KEY || kind == COL_AIR) && d < bd) { bd = d; best = i; }
+            }
+            if (best < 0)
+                break;
+            done[best] = true;
+            if (!search(&at, best))
+                ok = false;
+        }
+        if (!search(&at, -1))
+            ok = false;
+        double most = g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR);
+        printf("  %s%s: keys and door %.0f s, air %.0f s (%.0f s with the bottle)\n", g.cavern.name,
+               mirror ? " (mirrored)" : "", at.t, g.cavern.air_secs, most);
+        if (at.t > most * 0.95) {
+            printf("  not enough air, needs a tank of %.0f\n", at.t / 0.95 / (1 + AIR_BOTTLE / MAX_AIR) + 1);
             ok = false;
         }
     }

@@ -1,6 +1,9 @@
 /*
-** Desktop harness: lavapipe (software Vulkan) + offscreen render target + PNG writer. Development only.
-*/
+ * Desktop test harness: software Vulkan, an offscreen target and a PNG writer.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "vk_host.h"
 
 #include <stdarg.h>

@@ -1,7 +1,9 @@
 /*
-** Lantern Miner: simulation. A port of engine.ts (physics, guardians, power-ups, perks, shop rules, run flow) with the
-** same constants and the same order of operations. The app reads the state directly and consumes `events`.
-*/
+ * Lantern Miner: physics, guardians, power-ups, the shop and the run itself.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm.h"
 
 #include <stdio.h>
@@ -751,12 +753,10 @@ check_hazards(struct lm_game *g, struct lm_player *p)
     }
 }
 
-/* Clockwork Slow is now a bought, permanent power: guardians and conveyors run at 75% (the old timed pickup used
-   `timed`, which was too strong to keep on all the time). Returns 1 when not owned. */
+/* Clockwork Slow: guardians and conveyors run at three quarters speed */
 static double
-power_slow(struct lm_game const *g, double timed)
+power_slow(struct lm_game const *g)
 {
-    (void)timed;
     return g->powers[PU_CLOCKWORK_SLOW] > 0 ? 0.75 : 1.0;
 }
 
@@ -785,7 +785,7 @@ ladder_at(struct lm_game const *g, int col, double y)
 static void
 update_movers(struct lm_game *g, double dt)
 {
-    double step_dt = dt * power_slow(g, 0.5) * (g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1);
+    double step_dt = dt * power_slow(g) * (g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1);
     for (int i = 0; i < g->n_movers; i++) {
         struct lm_mover *m = &g->movers[i];
         double *pos = m->vertical ? &m->y : &m->x;
@@ -954,7 +954,7 @@ update_player(struct lm_game *g, double dt)
 
     double conveyor_vx = 0;
     if (p->grounded && p->on_conveyor != 0) {
-        double slow_factor = power_slow(g, 0.5);
+        double slow_factor = power_slow(g);
         double cleat_factor = lm_max(0.2, 1 - cleats * 0.55);
         double depth_boost = 1 + lm_min(0.6, (g->depth - 1) * 0.04);
         conveyor_vx = p->on_conveyor * CONVEYOR_PUSH_SPEED * depth_boost * slow_factor * cleat_factor;
@@ -1070,7 +1070,7 @@ static void
 update_enemies(struct lm_game *g, double dt)
 {
     double chrono = g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1;
-    double slow_mult = power_slow(g, 0.48) * chrono;
+    double slow_mult = power_slow(g) * chrono;
     double step_dt = dt * slow_mult;
     double pcx = g->player.x + g->player.width * 0.5;
     double pcy = g->player.y + g->player.height * 0.5;
@@ -1267,7 +1267,7 @@ static void
 update_projectiles(struct lm_game *g, double dt)
 {
     double chrono = g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1;
-    double step_dt = dt * (power_slow(g, 0.48) * chrono);
+    double step_dt = dt * (power_slow(g) * chrono);
     double pcx = g->player.x + g->player.width * 0.5;
     double pcy = g->player.y + g->player.height * 0.5;
 
@@ -1531,7 +1531,7 @@ emit_game_over(struct lm_game *g, bool air)
 {
     struct lm_run_summary *s = &g->summary;
     if (g->events & EV_GAME_OVER)
-        return; /* already ended this step (the original keeps simulating to the end of the step) */
+        return; /* already dealt with this step */
     g->paused = true;
     clear_inputs(g);
     lm_audio_set_music_mode(MUSIC_NONE, 1);
@@ -1762,7 +1762,7 @@ lm_use_continue(struct lm_game *g)
     clear_inputs(g);
     {
         int world_start = (lm_world_of(g->depth) - 1) * WORLD_SIZE + 1;
-        g->depth = 0; /* so that entering counts as arriving */
+        g->depth = 0; /* so the new world gets announced */
         enter_cavern(g, world_start);
     }
     g->running = true;

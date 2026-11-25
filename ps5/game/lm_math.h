@@ -1,4 +1,9 @@
-/* Small libm replacements (the console app has no libm in libc.a): floor, sin, cos, exp, log, pow, atan2-free. */
+/*
+ * Our own floor, sin, cos, exp, log and pow, as the title has no libm.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #include <stdint.h>
@@ -22,9 +27,9 @@ static inline double lm_max(double a, double b) { return a > b ? a : b; }
 static inline double lm_clamp(double x, double lo, double hi) { return x < lo ? lo : x > hi ? hi : x; }
 static inline double lm_sqrt(double x) { return __builtin_sqrt(x); }
 static inline double lm_hypot(double a, double b) { return __builtin_sqrt(a * a + b * b); }
-/* JS Math.round */
+/* round half up */
 static inline double lm_round(double x) { return lm_floor(x + 0.5); }
-/* JS-style remainder (sign of the dividend) */
+/* remainder with the sign of the first number */
 static inline double lm_fmod(double a, double b)
 {
     double q = a / b;

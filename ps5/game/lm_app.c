@@ -1,7 +1,9 @@
 /*
-** Lantern Miner PS5: application layer. Screens (title, run + HUD, pause, Old Barnaby's shop, game over, settings),
-** controller handling, persistence and the frame loop. Platform independent.
-*/
+ * Lantern Miner: screens, controller handling, saving and the frame loop.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "app.h"
 #include "lm.h"
 #include "lm_ui.h"
@@ -569,7 +571,7 @@ draw_title(struct app *a, struct vkr *r, double dt)
     double t = a->now;
     int sel = a->title_sel;
 
-    /* Ken Burns over the key art */
+    /* slow drift over the title art */
     float z = 1.06f + 0.025f * (float)lm_sin(t * 0.11);
     float sw = 1920.0f / z, sh = 1080.0f / z;
     float cx = 960 + 40 * (float)lm_sin(t * 0.05), cy = 540 + 18 * (float)lm_cos(t * 0.043);
@@ -579,7 +581,7 @@ draw_title(struct app *a, struct vkr *r, double dt)
     else
         vkr_rect_grad(r, 0, 0, VKR_W, VKR_H, HEX(0x16121b), HEX(0x231b24));
 
-    /* living light on the art: lantern flicker and the portal's pulse */
+    /* flickering lanterns and the glowing portal */
     vkr_blend(r, true);
     for (int i = 0; i < 7; i++) {
         float tx = (((k_title_lanterns[i][0] / 1376.0f) - 0.0145f) / 0.971f) * 1961.0f - 20.0f;
@@ -606,14 +608,14 @@ draw_title(struct app *a, struct vkr *r, double dt)
     }
     vkr_blend(r, false);
 
-    /* scrims keep the left side calm for the menu */
+    /* darken the left so the menu reads well */
     vkr_rect_gradh(r, 0, 0, 730, 1080, HEXA(0x0e0b12, 0.95), HEXA(0x0e0b12, 0.84));
     vkr_rect_gradh(r, 730, 0, 576, 1080, HEXA(0x0e0b12, 0.84), HEXA(0x0e0b12, 0.34));
     vkr_rect_gradh(r, 1306, 0, 614, 1080, HEXA(0x0e0b12, 0.34), HEXA(0x0e0b12, 0.18));
     vkr_rect_grad(r, 0, 0, VKR_W, 280, HEXA(0x0e0b12, 0.45), HEXA(0x0e0b12, 0.0));
     vkr_rect_grad(r, 0, 800, VKR_W, 280, HEXA(0x0e0b12, 0.0), HEXA(0x0e0b12, 0.82));
 
-    /* lockup */
+    /* logo */
     float bob = (float)lm_sin(t * 1.3) * 4.0f;
     ui_emblem(r, 116, 118 + bob, 2.3f, t);
     ui_text_shadow(r, VKR_DISPLAY, 96, 322, 128 + bob * 0.4f, HEX(0xfff1d6), "Lantern Miner");
@@ -640,7 +642,7 @@ draw_title(struct app *a, struct vkr *r, double dt)
         }
     }
 
-    /* personal bests, unboxed */
+    /* best scores */
     {
         float x = 120, y = my + count * (mh + gap) + 2;
         char b[64];

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 RedHotBallBag
+# SPDX-License-Identifier: GPL-3.0-or-later
 #!/usr/bin/env python3
 """Instantiates static weights from the variable Google fonts (stb_truetype only reads the default master).
 Run on Windows (fontTools): python tools/make_fonts.py"""

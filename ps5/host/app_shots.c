@@ -1,5 +1,9 @@
-/* Scripted desktop session of the whole app (software Vulkan): writes PNGs of each screen and exercises the simulation,
- * the shop and game-over flow. Development only. */
+/*
+ * Desktop test run: drives the whole game with a scripted pad and saves screenshots.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>

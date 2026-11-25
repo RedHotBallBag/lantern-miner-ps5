@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Plays every hand-built cavern to prove it can be finished.
 #   wsl -d Ubuntu -- bash tools/check-levels.sh [first-map last-map]
 set -euo pipefail

@@ -1,9 +1,12 @@
 /*
- * Lantern Miner PS5 console entry point (title PPSA58001): Vulkan display swapchain, DualSense, audio output, main loop.
+ * Lantern Miner: the PS5 side (title PPSA58001): display, controller, sound and the main loop.
  *
- * Vulkan instance/device/display setup adapted from PS5 Vulkan's radv_smoke.c (Copyright (C) 2026 Mihawk-99,
- * GPL-3.0-or-later) and verified on this console by the spike build. Audio follows PS5SX2's ProsperoAudio.cpp and input
- * follows launchbum's pad.cpp (both read on this machine). Private build: never distribute.
+ * Display set-up adapted from radv_smoke.c in PS5 Vulkan. Audio output follows PS5SX2's
+ * ProsperoAudio.cpp and the controller code follows pad.cpp from ROM Vault.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * Portions Copyright (C) 2026 Mihawk-99
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #define VK_NO_PROTOTYPES
@@ -182,7 +185,7 @@ audio_thread(void *arg)
     static float out[GRAIN * 2] __attribute__((aligned(64)));
     (void)arg;
     sceAudioOutInit();
-    /* user 255 = system, type 0 = main, param 4 = float stereo (as PS5SX2 opens it) */
+    /* system user, main output, float stereo */
     handle = sceAudioOutOpen(255, 0, 0, GRAIN, 48000, 4);
     report("audio: sceAudioOutOpen -> %x", handle);
     if (handle < 0)
@@ -536,8 +539,7 @@ main(void)
             }
         }
     }
-    /* Deterministic shutdown: stop the game and write its save, stop our threads, then leave without running exit-time
-     * destructors (the Vulkan driver's threads and static state are not safe to tear down while the process exits). */
+    /* Save, stop our threads and leave without exit-time destructors: the Vulkan driver isn't safe to tear down then. */
     report("exiting");
     if (g_pad.handle >= 0) {
         struct pad_vibration off = {0, 0}; /* never leave the controller buzzing */

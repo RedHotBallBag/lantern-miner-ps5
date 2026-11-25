@@ -3,9 +3,11 @@
 #   wsl -d Ubuntu -- bash tools/build-title.sh            # LTO build   -> build/PPSA58001
 #   LANTERN_LTO=0 LANTERN_OUT_SUFFIX=-safe bash tools/build-title.sh   # no LTO -> build/PPSA58001-safe
 #
-# Link recipe: ~/rpcs3-PS5/tools/link-title.sh (the working RPCS3 title) over PS5 Vulkan's tools/radv-link.sh
-# (Copyright (C) 2026 Mihawk-99, GPL-3.0-or-later). Works in an isolated copy of ~/rpcs3-PS5/deps/PS5_Vulkan (~/lantern-spike);
-# the SDK (~/rpcs3-PS5/deps/sdk-rpcs3) is only read. Private build: never distribute the output.
+# Copyright (C) 2026 RedHotBallBag
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Uses the link recipe from PS5 Vulkan (tools/radv-link.sh, Copyright (C) 2026 Mihawk-99) in a private copy of
+# that project (~/lantern-spike). The payload SDK is only read. See THIRD_PARTY_NOTICES.md.
 set -euo pipefail
 
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -101,6 +103,7 @@ rm -rf -- "$app"
 mkdir -p "$app/sce_sys" "$app/sce_module" "$app/assets/fonts" "$app/assets/art" "$app/assets/music"
 "$tool" self --sign --in "$work/eboot.elf" --out "$app/eboot.bin" --magic "$fself_magic"
 cp "$param" "$app/sce_sys/param.json"
+cp "$PROJ/LICENSE" "$PROJ/THIRD_PARTY_NOTICES.md" "$app/"
 cp "$PROJ"/assets/fonts/*.ttf "$PROJ"/assets/fonts/LICENSES.txt "$app/assets/fonts/"
 cp "$PROJ"/assets/art/*.jpg "$PROJ"/assets/art/*.png "$app/assets/art/"
 cp "$PROJ/assets/music/theme.wav" "$app/assets/music/"

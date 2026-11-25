@@ -1,7 +1,10 @@
 /*
-** Lantern Miner: world renderer. A port of renderer.ts onto the Vulkan 2D drawer. The 960x540 world is drawn at
-** `scale` virtual pixels per world pixel (2.0 = full screen; on a 4K output one world pixel is exactly 4x4 pixels).
-*/
+ * Lantern Miner: draws the cavern. The 960x540 world is shown at `scale` screen units per
+ * world pixel (2.0 fills the screen).
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm.h"
 #include "../gfx/vkr.h"
 
@@ -61,7 +64,7 @@ ring(struct wc const *c, double x, double y, double rad, double thick, uint32_t 
     vkr_circle_ring(c->r, c->ox + (float)x * c->s, c->oy + (float)y * c->s, (float)rad * c->s, (float)thick * c->s, col);
 }
 
-/* ctx.strokeRect: the line is centred on the rectangle's edge */
+/* outline centred on the edge */
 static void
 stroke_rect(struct wc const *c, double x, double y, double w, double h, double lw, uint32_t col)
 {

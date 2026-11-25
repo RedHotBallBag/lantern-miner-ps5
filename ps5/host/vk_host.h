@@ -1,7 +1,10 @@
 /*
-** Desktop harness for the renderer (development only): a software Vulkan device (lavapipe) and an offscreen target
-** whose pixels are read back and written as PNG. Lets every screen be looked at without a console.
-*/
+ * Desktop test harness, so every screen can be checked without the console. The callback
+ * fills the draw list; the frame is then rendered and written out as a PNG.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #include "../gfx/vkr.h"

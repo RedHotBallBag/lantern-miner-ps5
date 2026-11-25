@@ -1,4 +1,9 @@
-/* Lantern Miner: UI drawing helpers (text layout, controller glyphs, icons, emblem). */
+/*
+ * Lantern Miner: UI drawing helpers.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #include "../gfx/vkr.h"

@@ -1,7 +1,10 @@
 /*
-** Lantern Miner PS5 application: title, run, HUD, pause, Old Barnaby's shop, game over, settings. Platform independent;
-** the platform feeds it input and a renderer each frame and calls app_audio_pull() from its audio thread.
-*/
+ * Lantern Miner: the app layer (menus, HUD, shop, saving). The platform code feeds it input
+ * and a renderer each frame, and calls app_audio_pull() from the audio thread.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #include <stdbool.h>

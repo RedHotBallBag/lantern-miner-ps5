@@ -1,11 +1,11 @@
 /*
-** Lantern Miner PS5 renderer: an immediate-mode 2D drawer on plain Vulkan (rectangles, gradients, triangles, circles,
-** lines, additive radial glow, images, text). Everything is drawn in "virtual units" on a 1920x1080 canvas, scaled by
-** ctx.scale to the real target (4K output = 2.0, so one game pixel of the 960x540 world is exactly 4 device pixels).
-**
-** Derived from the emberSX renderer. Written for what the PS5 RADV driver runs: dynamic rendering, no MSAA, no image
-** queries in shaders, small push constants.
-*/
+ * Lantern Miner: a small 2D renderer on Vulkan (shapes, glows, images and text), drawing on a
+ * 1920x1080 canvas scaled to the output. It started life in my emberSX renderer. Sticks to what the
+ * PS5 RADV driver is happy with: dynamic rendering, no MSAA, no image queries, small push constants.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #pragma once
 
 #define VK_NO_PROTOTYPES

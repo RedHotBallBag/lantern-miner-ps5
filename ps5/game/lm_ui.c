@@ -1,4 +1,9 @@
-/* Lantern Miner: UI drawing helpers. */
+/*
+ * Lantern Miner: text, button glyphs, icons and panels.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm_ui.h"
 
 #include <stdio.h>

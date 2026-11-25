@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.8</b> (Build 13) · <code>PPSA58001</code></p>
+<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9</b> (Build 14) · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
@@ -22,7 +22,7 @@ worlds, with water, ice, wind and fire still to come. I'll keep building it, so 
 
 Grab all the keys, get to the door and head down to the next cavern. Sounds easy. It isn't.
 
-- **Your air runs out**, and quickly. There's only one air bottle in each cavern
+- **Your air runs out**, and fast. There's only one air bottle in each cavern
 - **Mind the drop.** Fall too far and you lose a life
 - **Eight kinds of guardian**, from clockwork beetles to a stalker that follows you through walls
 - Ladders, lifts, moving platforms, conveyors, crumbling ledges, brambles and deep water
@@ -55,7 +55,7 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 
 ## Install
 
-1. Download the latest zip from **Releases** and unzip it.
+1. Download `LanternMiner-v0.9.0-beta.zip` from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
 3. Launch it and enjoy (or don't, and throw the pad).
 
@@ -81,11 +81,15 @@ After changing the version or the theme tune, run `python tools/make_presentatio
 ## Credits
 
 - Made by **RedHotBallBag**
-- Inspired by **Manic Miner** and **Jet Set Willy** by Matthew Smith. This is a fan homage and isn't affiliated with or
+- A homage to **Manic Miner** and **Jet Set Willy** by Matthew Smith. It's a fan game and isn't affiliated with or
   endorsed by their makers
-- Fonts: Fraunces, DM Sans and JetBrains Mono (SIL Open Font Licence, see `assets/fonts/`)
+- Fonts: Fraunces, DM Sans and JetBrains Mono (SIL Open Font Licence)
 - `stb_image.h` and `stb_truetype.h` by Sean Barrett
-- PS5 display and Vulkan start-up code adapted from **PS5 Vulkan** by Mihawk-99 (GPL-3.0-or-later). Builds also use its RADV
-  driver and the PS5 payload SDK
+- Built on **PS5 Vulkan** by Mihawk-99, the **PS5 payload SDK**, **ps5-native-app-boilerplate** by BlackBearReloaded and
+  **Mesa**. Thank you all
 
-Builds are private, so please don't share them around.
+## Licence
+
+The code is free software under the [GPL-3.0-or-later](LICENSE), so you can use it, change it and share it on the same
+terms. The art, music and name are mine: pass them on with the game, but please don't use them for something else. Full
+details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

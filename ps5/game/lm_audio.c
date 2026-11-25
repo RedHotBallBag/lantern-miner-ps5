@@ -1,9 +1,10 @@
 /*
-** Lantern Miner: audio. A software port of audio.ts (Web Audio): the same oscillator waveforms, envelopes, note
-** tables, warm low-pass on the music bus and the same sound effects, mixed on the platform's audio thread.
-** The title screen plays a recorded theme (assets/music/theme.wav) instead of the synth.
-** 48 kHz stereo. The game thread only queues voices; the audio thread renders.
-*/
+ * Lantern Miner: sound. A small synth for the cavern tunes and effects, plus the recorded title
+ * theme. 48 kHz stereo, mixed on the audio thread; the game thread only queues voices.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 #include "lm.h"
 
 #include <pthread.h>
@@ -54,7 +55,7 @@ static struct {
     bool ready;
 } A;
 
-/* RBJ low-pass; `q_db` follows Web Audio (resonance in dB). */
+/* low-pass filter, resonance in dB */
 static void
 lowpass(struct biquad *b, double fc, double q_db)
 {
@@ -359,8 +360,7 @@ lm_audio_pull(int16_t *lr, size_t frames)
         memset(lr, 0, frames * 4);
         return;
     }
-    /* The voice list is locked once per chunk (not twice per sample): a chunk runs up to the next sequencer step
-       or 256 samples, whichever is first. */
+    /* lock once per chunk: up to the next music step or 256 samples */
     double mus[256], sfxb[256], trk[256][2];
     double const fade_step = 1.0 / (0.08 * SR);
     size_t f = 0;
@@ -434,7 +434,7 @@ lm_audio_pull(int16_t *lr, size_t frames)
             double music = bq_run(&A.music_lp, mus[k]) * 0.28 * A.music_vol;
             double sfx = sfxb[k] * 0.42 * A.sfx_vol;
             A.master += (A.master_target - A.master) * smooth;
-            double out = (music + sfx) * A.master * 2.2; /* console loudness: the web version leaves volume to the browser */
+            double out = (music + sfx) * A.master * 2.2; /* boosted to a sensible level on a TV */
             double level = A.music_vol * (A.master / 0.72); /* the theme follows the music slider and mute */
             for (int c = 0; c < 2; c++)
                 lr[(f + k) * 2 + c] = (int16_t)(lm_clamp(out + trk[k][c] * level, -1.0, 1.0) * 32000.0);
@@ -565,7 +565,7 @@ lm_audio_game_over(void)
         sfx_note(midi_hz(n[i]), W_TRIANGLE, 0.3, 0.2, i * 0.11);
 }
 
-/* menu feedback (not in the web version, which had no menus to navigate) */
+/* menu sounds */
 void
 lm_audio_ui_move(void)
 {

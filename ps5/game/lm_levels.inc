@@ -1,11 +1,15 @@
-/* The hand-built caverns. Included by lm_gen.c; the table at the bottom is the order they are played in.
-**
-** The grid is 32 x 18 tiles; the outer walls, ceiling and floor are added for you. Columns run 1..30, rows 1..16.
-** Things the miner stands on are given by the row they occupy; items, foes, start and exit by the row they stand IN
-** (one above the ledge). Reach: a jump climbs 3 rows (never 4, so 4 rows apart means "ladder or lift only") and
-** clears a gap of about 5 tiles (so 8 or more means "moving platform only").
-** Foes are listed most basic first: shallow caverns only use the first few.
-** After editing a map, run tools/check-levels.sh: it plays every map and mirror to prove it can still be finished. */
+/*
+ * The hand-built caverns, included by lm_gen.c. The table at the bottom is the playing order.
+ *
+ * The grid is 32 x 18 tiles, with the walls, ceiling and floor added for you. Columns 1..30, rows 1..16.
+ * Things you stand on are given by the row they occupy; items, foes, start and exit by the row they are
+ * IN (one above the ledge). A jump climbs 3 rows (so 4 rows apart needs a ladder or lift) and clears
+ * about 5 tiles (8 or more needs a moving platform). Foes are listed most basic first, and early caverns
+ * only use the first few. Run tools/check-levels.sh after changing a map.
+ *
+ * Copyright (C) 2026 RedHotBallBag
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
 #define BLOCK(c0, r0, c1, r1) {OP_FILL, T_SOLID, c0, r0, c1, r1}
 #define LEDGE(r, c0, c1) {OP_FILL, T_ONE_WAY, c0, r, c1, r}
@@ -292,28 +296,28 @@ static struct op const lv_greathearth[] = {
 /* The campaign, in order: ten caverns to a world. World 1 is finished; the caverns after it are the earlier maps
    waiting to be reworked into their own worlds. */
 static struct level const k_levels[] = {
-    LV(lv_hearth, "The Vestibule of Mild Peril", "Grab the keys. Bottles top up air", BIOME_TIMBER_HEARTH, 53),
-    LV(lv_loft, "Up the Ladder to Mrs Nuttall's", "Climb with Up and Down", BIOME_TIMBER_HEARTH, 46),
-    LV(lv_crossing, "Is This the Bus to Wigan?", "Ride across the gap", BIOME_TIMBER_HEARTH, 37),
-    LV(lv_stones, "Stepping Stones of the Lesser Gentry", "Mind the drop", BIOME_TIMBER_HEARTH, 37),
-    LV(lv_dumbwaiter, "The Dumbwaiter Wants a Word", "Only the lifts go up", BIOME_TIMBER_HEARTH, 57),
-    LV(lv_zigzag, "Left a Bit, Right a Bit, Left a Bit", "There and back again", BIOME_TIMBER_HEARTH, 70),
-    LV(lv_stair, "Eighty-Six Steps and No Biscuit", "Up, over and down", BIOME_TIMBER_HEARTH, 37),
-    LV(lv_towers, "Twinned With Another Tower", "Over the great wall", BIOME_TIMBER_HEARTH, 42),
-    LV(lv_pulley, "Pulley Inspector Found in Marmalade", "Lifts, ladders, long drop", BIOME_TIMBER_HEARTH, 46),
-    LV(lv_greathearth, "Tea With the Mayor's Spare Head", "Everything you've learned", BIOME_TIMBER_HEARTH, 66),
+    LV(lv_hearth, "The Vestibule of Mild Peril", "Grab the keys. Bottles top up air", BIOME_TIMBER_HEARTH, 42),
+    LV(lv_loft, "Up the Ladder to Mrs Nuttall's", "Climb with Up and Down", BIOME_TIMBER_HEARTH, 37),
+    LV(lv_crossing, "Is This the Bus to Wigan?", "Ride across the gap", BIOME_TIMBER_HEARTH, 30),
+    LV(lv_stones, "Stepping Stones of the Lesser Gentry", "Mind the drop", BIOME_TIMBER_HEARTH, 30),
+    LV(lv_dumbwaiter, "The Dumbwaiter Wants a Word", "Only the lifts go up", BIOME_TIMBER_HEARTH, 50),
+    LV(lv_zigzag, "Left a Bit, Right a Bit, Left a Bit", "There and back again", BIOME_TIMBER_HEARTH, 56),
+    LV(lv_stair, "Eighty-Six Steps and No Biscuit", "Up, over and down", BIOME_TIMBER_HEARTH, 30),
+    LV(lv_towers, "Twinned With Another Tower", "Over the great wall", BIOME_TIMBER_HEARTH, 34),
+    LV(lv_pulley, "Pulley Inspector Found in Marmalade", "Lifts, ladders, long drop", BIOME_TIMBER_HEARTH, 37),
+    LV(lv_greathearth, "Tea With the Mayor's Spare Head", "Everything you've learned", BIOME_TIMBER_HEARTH, 53),
 
-    LV(lv_bridges, "Bridge Awaiting Repair Since 1974", "Don't stop moving", BIOME_GLOW_MOSS, 34),
-    LV(lv_ferries, "The 4.15 to Nowhere in Particular", "Hop from ferry to ferry", BIOME_GLOW_MOSS, 128),
-    LV(lv_chasm, "A Frankly Unnecessary Chasm", "Wait for your ride", BIOME_GLOW_MOSS, 42),
-    LV(lv_lifthall, "Ministry of Going Up and Down", "Pillar to pillar", BIOME_GLOW_MOSS, 37),
-    LV(lv_honeycomb, "The Bees Have Since Resigned", "Small steps, long fall", BIOME_GLOW_MOSS, 34),
-    LV(lv_gallery, "Prickly Exhibition (Do Not Lick)", "Watch your feet", BIOME_FROST_LANTERN, 37),
-    LV(lv_rails, "Rail Replacement Bus Not Provided", "No solid ground", BIOME_AMETHYST_GROTTO, 37),
-    LV(lv_brokenladders, "Ladders Condemned by the Vicar", "Climb, leap, climb", BIOME_AMETHYST_GROTTO, 37),
-    LV(lv_spire, "The Bishop's Crumbly Bit", "It all gives way", BIOME_AMETHYST_GROTTO, 34),
-    LV(lv_works, "Sausage Rethinking Plant No. 2", "Nothing stands still", BIOME_CLOCKWORK_CELLAR, 37),
-    LV(lv_heart, "Local Man Marries Cuckoo Clock", "Keep time or fall", BIOME_CLOCKWORK_CELLAR, 40),
-    LV(lv_gauntlet, "Attack of the Livid Teasmades", "No room to hide", BIOME_CLOCKWORK_CELLAR, 68),
-    LV(lv_abyss, "The Last Abyss Before Swindon", "The last of the deep", BIOME_CLOCKWORK_CELLAR, 76),
+    LV(lv_bridges, "Bridge Awaiting Repair Since 1974", "Don't stop moving", BIOME_GLOW_MOSS, 27),
+    LV(lv_ferries, "The 4.15 to Nowhere in Particular", "Hop from ferry to ferry", BIOME_GLOW_MOSS, 124),
+    LV(lv_chasm, "A Frankly Unnecessary Chasm", "Wait for your ride", BIOME_GLOW_MOSS, 34),
+    LV(lv_lifthall, "Ministry of Going Up and Down", "Pillar to pillar", BIOME_GLOW_MOSS, 30),
+    LV(lv_honeycomb, "The Bees Have Since Resigned", "Small steps, long fall", BIOME_GLOW_MOSS, 27),
+    LV(lv_gallery, "Prickly Exhibition (Do Not Lick)", "Watch your feet", BIOME_FROST_LANTERN, 30),
+    LV(lv_rails, "Rail Replacement Bus Not Provided", "No solid ground", BIOME_AMETHYST_GROTTO, 30),
+    LV(lv_brokenladders, "Ladders Condemned by the Vicar", "Climb, leap, climb", BIOME_AMETHYST_GROTTO, 30),
+    LV(lv_spire, "The Bishop's Crumbly Bit", "It all gives way", BIOME_AMETHYST_GROTTO, 27),
+    LV(lv_works, "Sausage Rethinking Plant No. 2", "Nothing stands still", BIOME_CLOCKWORK_CELLAR, 30),
+    LV(lv_heart, "Local Man Marries Cuckoo Clock", "Keep time or fall", BIOME_CLOCKWORK_CELLAR, 32),
+    LV(lv_gauntlet, "Attack of the Livid Teasmades", "No room to hide", BIOME_CLOCKWORK_CELLAR, 54),
+    LV(lv_abyss, "The Last Abyss Before Swindon", "The last of the deep", BIOME_CLOCKWORK_CELLAR, 61),
 };
