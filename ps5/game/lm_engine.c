@@ -155,6 +155,14 @@ load_cavern(struct lm_game *g, int depth)
         for (int i = 0; i < g->cavern.n_collect; i++)
             if (g->cavern.collect[i].kind == COL_CHEST)
                 g->cavern.collect[i].collected = true;
+    if (g->paid_depth != depth) {
+        g->paid_depth = depth;
+        g->paid = 0;
+    }
+    /* gems already banked stay gone; keys come back, as the door needs them */
+    for (int i = 0; i < g->cavern.n_collect; i++)
+        if (g->cavern.collect[i].kind == COL_RELIC && (g->paid >> i & 1))
+            g->cavern.collect[i].collected = true;
     create_player(g);
     g->safe_x = g->player.x;
     g->safe_y = g->player.y;
@@ -262,6 +270,8 @@ lm_start_run(struct lm_game *g, char const *seed)
     memset(g->power_time, 0, sizeof(g->power_time));
     g->next_shield = false;
     g->chest_taken = 0;
+    g->paid_depth = 0;
+    g->paid = 0;
     g->paused = false;
     g->pending_advance = 0;
     g->banner.active = false;
@@ -364,6 +374,13 @@ lm_shop_unlock_at(int item)
     }
 }
 
+/* nothing in the Delver's Cache would do any good */
+static bool
+cache_wasted(struct lm_game const *g)
+{
+    return g->lives >= MAX_LIVES && g->hearts >= g->max_hearts && g->powers[PU_TEA_THERMOS] >= 3;
+}
+
 void
 lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *out)
 {
@@ -406,6 +423,12 @@ lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *ou
             return;
         }
     } else if (item == SHOP_DELVERS_CACHE || item == SHOP_PHOENIX_FEATHER) {
+        if (item == SHOP_DELVERS_CACHE && cache_wasted(g)) {
+            snprintf(out->owned, sizeof(out->owned), "Bundle");
+            snprintf(out->status, sizeof(out->status), "All Full");
+            out->is_owned = true;
+            return;
+        }
         if (item == SHOP_PHOENIX_FEATHER && g->phoenix) {
             snprintf(out->owned, sizeof(out->owned), "Packed");
             snprintf(out->status, sizeof(out->status), "Ready");
@@ -480,6 +503,8 @@ lm_shop_purchase(struct lm_game *g, int item)
         g->lives += 1;
         g->lives_bought += 1;
     } else if (item == SHOP_DELVERS_CACHE) {
+        if (cache_wasted(g))
+            return false;
         g->relic_points -= cost;
         g->lives = g->lives + 2 < MAX_LIVES ? g->lives + 2 : MAX_LIVES;
         g->lives_bought += 2;
@@ -753,7 +778,7 @@ check_hazards(struct lm_game *g, struct lm_player *p)
     }
 }
 
-/* Clockwork Slow: guardians and conveyors run at three quarters speed */
+/* Clockwork Slow: guardians and conveyors run at three quarters speed. Lifts and platforms are left alone. */
 static double
 power_slow(struct lm_game const *g)
 {
@@ -785,13 +810,12 @@ ladder_at(struct lm_game const *g, int col, double y)
 static void
 update_movers(struct lm_game *g, double dt)
 {
-    double step_dt = dt * power_slow(g) * (g->perks[PERK_CHRONOMETER] > 0 ? 0.8 : 1);
     for (int i = 0; i < g->n_movers; i++) {
         struct lm_mover *m = &g->movers[i];
         double *pos = m->vertical ? &m->y : &m->x;
         double lo = m->vertical ? m->min_y : m->min_x, hi = m->vertical ? m->max_y : m->max_x;
         double old = *pos;
-        *pos += m->direction * m->speed * step_dt;
+        *pos += m->direction * m->speed * dt;
         if (*pos <= lo) {
             *pos = lo;
             m->direction = 1;
@@ -868,17 +892,26 @@ update_climb(struct lm_game *g, struct lm_player *p, double dt)
     p->has_used_double_jump = false;
 
     double next = foot + p->vy * dt;
+    bool footing = true;
     if (dir < 0 && !ladder_at(g, col, next - 0.01)) {
         /* over the top: step onto the ledge the ladder hangs from */
         next = lm_floor((next - 0.01) / TILE_SIZE + 1) * TILE_SIZE;
         p->climbing = false;
     } else if (dir > 0 && !ladder_at(g, col, next)) {
-        next = lm_floor(next / TILE_SIZE) * TILE_SIZE; /* reached the floor below */
-        p->climbing = false;
+        int row = (int)lm_floor(next / TILE_SIZE);
+        footing = false;
+        for (int c = (int)lm_floor((p->x + 2) / TILE_SIZE); c <= (int)lm_floor((p->x + p->width - 2) / TILE_SIZE); c++) {
+            enum lm_tile t = get_tile(g, c, row);
+            if (t != T_EMPTY && t != T_BRAMBLE && t != T_PIT && !(t == T_CRUMBLE && g->crumble[row][c].state == CR_BROKEN))
+                footing = true;
+        }
+        if (footing)
+            next = row * TILE_SIZE; /* reached the floor below */
+        p->climbing = false; /* otherwise the ladder stops in mid-air and the miner drops off it */
     }
     if (!p->climbing) {
         p->vy = 0;
-        p->grounded = true;
+        p->grounded = footing;
     }
     p->y = next - p->height;
     if (dir != 0)
@@ -1307,7 +1340,7 @@ release_ghoul(struct lm_game *g)
     e->s.min_x = e->s.min_y = TILE_SIZE;
     e->s.max_x = CANVAS_W - 2.0 * TILE_SIZE;
     e->s.max_y = CANVAS_H - 2.0 * TILE_SIZE;
-    e->s.speed = 56 + lm_min(24, g->depth);
+    e->s.speed = 36 + lm_min(26, g->depth * 1.2); /* about a stalker's pace, far slower than the miner */
     e->s.direction = 1;
     e->width = e->height = 22;
     e->anchor_x = e->s.x;
@@ -1406,16 +1439,20 @@ check_collectables(struct lm_game *g, double dt)
         }
 
         if (dist < 22) {
+            bool paid = g->paid >> i & 1; /* a key picked up again after a retry */
+            g->paid |= 1u << i;
             item->collected = true;
             if (item->kind == COL_KEY) {
                 g->keys_collected += 1;
-                g->total_keys_run += 1;
-                int pts = (int)lm_round(200 * score_mult);
-                g->score += pts;
                 lm_audio_key(g->keys_collected - 1);
                 spawn_burst(g, item->x, item->y, 14, 0xf43fa5, 135);
-                snprintf(buf, sizeof(buf), "+%d", pts);
-                spawn_float(g, item->x, item->y - 10, buf, 0xf43fa5);
+                if (!paid) {
+                    g->total_keys_run += 1;
+                    int pts = (int)lm_round(200 * score_mult);
+                    g->score += pts;
+                    snprintf(buf, sizeof(buf), "+%d", pts);
+                    spawn_float(g, item->x, item->y - 10, buf, 0xf43fa5);
+                }
                 rumble(g, 0.18, 0.05);
 
                 if (g->keys_collected >= g->cavern.keys_total && !g->portal_unlocked) {
@@ -1568,7 +1605,7 @@ lose_life(struct lm_game *g, bool air)
         return;
     if (g->lives <= 1 && g->phoenix) {
         g->phoenix = false;
-        g->lives = 3; /* the feather's flame; the life being lost now comes off this */
+        g->lives = 4; /* the life being lost now comes off this, leaving the three promised */
         spawn_float(g, p->x + p->width * 0.5, p->y - 24, "PHOENIX RISES!", 0xff6b3d);
     }
     g->flawless = false;
@@ -1758,6 +1795,7 @@ lm_use_continue(struct lm_game *g)
     g->hearts = g->max_hearts;
     g->score = g->world_score;
     g->chest_taken = 0;
+    g->paid_depth = 0;
     g->respawn_timer = g->pending_advance = 0;
     clear_inputs(g);
     {
@@ -1792,6 +1830,8 @@ lm_save_run(struct lm_game const *g, FILE *f, bool in_shop)
             g->continues_bought, g->flawless, g->phoenix, g->next_shield, g->player.has_shield && g->pending_advance <= 0);
     fprintf(f, "relics=%d\nkeys=%d\nchest_taken=%d\nlives_bought=%d\n", g->total_relics_run, g->total_keys_run, g->chest_taken,
             g->lives_bought);
+    fprintf(f, "run_start_high=%d\nrun_start_depth=%d\npaid_depth=%d\npaid=%u\n", g->run_start_high, g->run_start_depth,
+            g->paid_depth, g->paid);
     for (int i = 0; i < PERK_COUNT; i++)
         fprintf(f, "perk%d=%d\n", i, g->perks[i]);
     for (int i = 0; i < PU_COUNT; i++)
@@ -1805,6 +1845,8 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     int version = 0, depth = 0, shop = 0, down = 0, shield_on = 0;
     int perks[PERK_COUNT] = {0}, powers[PU_COUNT] = {0}, times[PU_COUNT] = {0};
     int v[16] = {0};
+    int start_high = -1, start_depth = -1, paid_depth = 0; /* absent from older saves */
+    uint32_t paid = 0;
     static char const *const names[] = {"score", "world_score", "relic_points", "lives", "hearts", "max_hearts", "continues",
                                         "continues_bought", "flawless", "phoenix", "next_shield", "relics", "keys", "chest_taken",
                                         "lives_bought"};
@@ -1822,6 +1864,10 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
         else if (!strcmp(line, "in_shop")) shop = n;
         else if (!strcmp(line, "down")) down = n;
         else if (!strcmp(line, "shield_on")) shield_on = n;
+        else if (!strcmp(line, "run_start_high")) start_high = n;
+        else if (!strcmp(line, "run_start_depth")) start_depth = n;
+        else if (!strcmp(line, "paid_depth")) paid_depth = n; /* before the "paid" test below */
+        else if (!strcmp(line, "paid")) paid = (uint32_t)strtoul(eq, NULL, 10);
         else if (!strncmp(line, "perk", 4) && (k = atoi(line + 4)) >= 0 && k < PERK_COUNT) perks[k] = n;
         else if (!strncmp(line, "power", 5) && (k = atoi(line + 5)) >= 0 && k < PU_COUNT) powers[k] = n;
         else if (!strncmp(line, "time", 4) && (k = atoi(line + 4)) >= 0 && k < PU_COUNT) times[k] = n;
@@ -1850,6 +1896,12 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     g->chest_taken = v[13];
     g->lives_bought = v[14];
     memcpy(g->perks, perks, sizeof(perks));
+    if (start_high >= 0)
+        g->run_start_high = start_high;
+    if (start_depth >= 0)
+        g->run_start_depth = start_depth;
+    g->paid_depth = paid_depth;
+    g->paid = paid;
     load_cavern(g, depth);
     /* loading a cavern spends shields, so put them back exactly as saved */
     memcpy(g->powers, powers, sizeof(powers));

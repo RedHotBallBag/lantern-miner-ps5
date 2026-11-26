@@ -646,7 +646,9 @@ draw_lighting(struct wc const *c, struct lm_game const *g, bool bloom)
         if (it->collected || it->kind == COL_RELIC)
             continue;
         double rad = it->kind == COL_KEY ? 28 : 34;
-        uint32_t col = it->kind == COL_KEY ? RGBA(0xf43fa5, 0.18 * k) : RGBA(0xffe347, 0.16 * k);
+        uint32_t col = it->kind == COL_KEY   ? RGBA(0xf43fa5, 0.18 * k)
+                       : it->kind == COL_AIR ? RGBA(0x22e4f5, 0.18 * k)
+                                             : RGBA(0xffe347, 0.16 * k);
         glow(c, it->x, it->y, rad, col, 0.5);
     }
     vkr_blend(c->r, false);

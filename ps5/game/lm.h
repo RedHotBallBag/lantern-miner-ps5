@@ -18,8 +18,8 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.9.1"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 15
+#define LM_VERSION "0.9.2"   /* shown on the loading splash and the title screen */
+#define LM_BUILD 16
 #define START_LIVES 5
 #define MAX_CONTINUES 3
 #define WORLD_SIZE 10 /* caverns to a world */
@@ -260,6 +260,8 @@ struct lm_game {
     int n_movers;
     double safe_x, safe_y; /* last firm footing: a fall into a pit puts the miner back here */
     int chest_taken;       /* depth whose chest has been opened, so a retry does not refill it */
+    int paid_depth;        /* the cavern `paid` belongs to */
+    uint32_t paid;         /* one bit per collectable already scored there, so a retry cannot score it twice */
     struct lm_particle particles[LM_MAX_PARTICLES];
     int n_particles;
     struct lm_float_text floats[LM_MAX_FLOATS];

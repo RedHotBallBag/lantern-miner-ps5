@@ -182,7 +182,7 @@ save_run(struct app *a)
     FILE *f = fopen(tmp, "w");
     if (!f)
         return;
-    lm_save_run(&a->g, f, a->screen == SC_SHOP || (a->screen == SC_SETTINGS && a->prev_screen == SC_SHOP));
+    lm_save_run(&a->g, f, a->screen == SC_SHOP);
     if (fclose(f) != 0)
         return;
     rename(tmp, p);
@@ -677,8 +677,13 @@ draw_title(struct app *a, struct vkr *r, double dt)
         hintbar(r, 2, gl, lb);
         draw_version(r, 0.7f);
     }
+}
+
+/* Buy me a coffee, above the build number. Drawn after the scanlines so phones can still read it. */
+static void
+draw_qr(struct app *a, struct vkr *r)
+{
     if (a->img[IMG_QR] >= 0) {
-        /* buy me a coffee, above the build number */
         float const s = 184, qx = 1856 - s, qy = 806;
         vkr_shadow(r, qx - 8, qy - 8, s + 16, s + 16, 14, 24, HEXA(0x000000, 0.6));
         vkr_rrect(r, qx - 8, qy - 8, s + 16, s + 16, 14, HEX(0xffffff));
@@ -706,19 +711,6 @@ draw_hud(struct app *a, struct vkr *r)
     snprintf(b, sizeof(b), "World %d \xc2\xb7 %s", lm_world_of(g->depth), bio->label);
     ui_text(r, VKR_SANS, 22, lx, 17, HEX(C_DIM), b);
     lx += ui_text_w(r, VKR_SANS, 22, b) + 40;
-    /* permanent gear, as far as there is room before the right-hand readouts */
-    for (int p = 0; p < PERK_COUNT; p++) {
-        if (g->perks[p] <= 0)
-            continue;
-        if (g->perks[p] > 1)
-            snprintf(b, sizeof(b), "%s x%d", lm_perks[p].short_label, g->perks[p]);
-        else
-            snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
-        if (lx + ui_text_w(r, VKR_SANS_BOLD, 22, b) > 930)
-            break;
-        ui_text(r, VKR_SANS_BOLD, 22, lx, 17, HEX(lm_perks[p].accent), b);
-        lx += ui_text_w(r, VKR_SANS_BOLD, 22, b) + 22;
-    }
 
     float rx = 1868;
     lm_fmt_int(b, sizeof(b), g->score);
@@ -782,6 +774,19 @@ draw_hud(struct app *a, struct vkr *r)
     snprintf(b, sizeof(b), "Lives x%d", g->lives);
     ui_text_r(r, VKR_MONO_BOLD, 26, rx - 12, 14, g->lives <= 1 ? HEX(C_PINK) : HEX(C_CREAM), b);
     rx -= ui_text_w(r, VKR_MONO_BOLD, 26, b) + 40;
+    /* permanent gear, as far as there is room before the right-hand readouts */
+    for (int p = 0; p < PERK_COUNT; p++) {
+        if (g->perks[p] <= 0)
+            continue;
+        if (g->perks[p] > 1)
+            snprintf(b, sizeof(b), "%s x%d", lm_perks[p].short_label, g->perks[p]);
+        else
+            snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
+        if (lx + ui_text_w(r, VKR_SANS_BOLD, 22, b) > rx)
+            break;
+        ui_text(r, VKR_SANS_BOLD, 22, lx, 17, HEX(lm_perks[p].accent), b);
+        lx += ui_text_w(r, VKR_SANS_BOLD, 22, b) + 22;
+    }
     if (g->continues > 0) {
         snprintf(b, sizeof(b), "Continues x%d", g->continues);
         ui_text_r(r, VKR_MONO_BOLD, 22, 1868, 50, HEX(C_GREEN), b);
@@ -957,6 +962,8 @@ draw_shop(struct app *a, struct vkr *r)
     }
     for (int i = g->max_hearts - 1; i >= 0; i--)
         ui_heart(r, 1500 - (g->max_hearts - 1 - i) * 40, 60, 30, i < g->hearts, 0);
+    snprintf(b, sizeof(b), "Lives x%d \xc2\xb7 Continues x%d", g->lives, g->continues);
+    ui_text_r(r, VKR_MONO_BOLD, 24, 1516, 20, HEX(C_CREAM), b);
 
     /* left: portrait and dialogue */
     float px = 80, py = 150, pw = 640, ph = 478;
@@ -1361,7 +1368,7 @@ update_shop(struct app *a, struct app_input const *in)
         int rows = shop_rows(page), len = shop_rowlen(page, row);
         if (p & PAD_LEFT) { col = (col + len - 1) % len; sel = shop_item_at(page, row, col); lm_audio_ui_move(); }
         if (p & PAD_RIGHT) { col = (col + 1) % len; sel = shop_item_at(page, row, col); lm_audio_ui_move(); }
-        if (p & PAD_UP) { row = (row + rows - 1) % rows; sel = shop_item_at(page, row, col); lm_audio_ui_move(); }
+        if (p & PAD_UP) { sel = row == 0 ? SHOP_COUNT : shop_item_at(page, row - 1, col); lm_audio_ui_move(); }
         if (p & PAD_DOWN) {
             if (row == rows - 1) sel = SHOP_COUNT; else sel = shop_item_at(page, row + 1, col);
             lm_audio_ui_move();
@@ -1648,6 +1655,8 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
     /* over every screen, so a change shows straight away in Settings */
     if (a->set.scan)
         vkr_scanlines(r, 0, 0, VKR_W, VKR_H, vkr_scale(r) * 3.0f, HEX(0x000000), a->set.scan == 1 ? 0.30f : 0.55f);
+    if (a->screen == SC_TITLE && in->connected)
+        draw_qr(a, r);
     draw_fade_in(a, r);
     draw_splash(a, r);
 }

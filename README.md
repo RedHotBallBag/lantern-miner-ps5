@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9.1</b> (Build 15) · <code>PPSA58001</code></p>
+<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9.2</b> (Build 16) · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
@@ -17,6 +17,8 @@ It's written in C with Vulkan.
 
 So far there's **one finished world** (ten caverns) plus **13 extra caverns** after it. The plan is 50 caverns across five
 worlds, with water, ice, wind and fire still to come. I'll keep building it, so let me know if anything's odd or unfair.
+
+What's new in each version is in the [change log](CHANGELOG.md).
 
 ## What you're in for
 
@@ -55,7 +57,7 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 
 ## Install
 
-1. Download `LanternMiner-v0.9.1-beta.zip` from **Releases** and unzip it.
+1. Download `LanternMiner-v0.9.2-beta.zip` from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
 3. Launch it and enjoy (or don't, and throw the pad).
 

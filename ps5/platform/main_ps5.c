@@ -151,11 +151,14 @@ pad_poll(struct app_input *in, double now)
     }
     in->connected = true;
     held = d.buttons & ~(PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT);
-    /* left stick as a D-pad: a platformer wants a light touch to run (about 50% deflection) */
-    if ((d.buttons & PAD_UP) || d.ly < 64) held |= PAD_UP;
-    if ((d.buttons & PAD_DOWN) || d.ly > 192) held |= PAD_DOWN;
-    if ((d.buttons & PAD_LEFT) || d.lx < 64) held |= PAD_LEFT;
-    if ((d.buttons & PAD_RIGHT) || d.lx > 192) held |= PAD_RIGHT;
+    /* Left stick as a D-pad. Running needs only a light push (about 35%); up and down need half way and a mostly
+       vertical push, so running past a ladder at a slight angle does not grab it. */
+    int sx = d.lx - 128, sy = d.ly - 128;
+    bool upright = abs(sy) * 5 >= abs(sx) * 6;
+    if ((d.buttons & PAD_UP) || (sy < -64 && upright)) held |= PAD_UP;
+    if ((d.buttons & PAD_DOWN) || (sy > 64 && upright)) held |= PAD_DOWN;
+    if ((d.buttons & PAD_LEFT) || sx < -45) held |= PAD_LEFT;
+    if ((d.buttons & PAD_RIGHT) || sx > 45) held |= PAD_RIGHT;
     in->pressed = held & ~g_pad.prev;
     for (int i = 0; i < 4; i++) {
         if (!(held & dirs[i]))

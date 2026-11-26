@@ -255,7 +255,9 @@ solve(int level, bool mirror, int depth)
     for (int i = 0; i < g.n_enemies; i++) {
         memset(&g.enemies[i], 0, sizeof(g.enemies[i]));
         g.enemies[i].s = g.cavern.enemies[i];
-        g.enemies[i].width = g.enemies[i].height = 22;
+        bool low = g.enemies[i].s.kind == EN_BEETLE || g.enemies[i].s.kind == EN_CHARGER; /* sizes as load_cavern sets them */
+        g.enemies[i].width = low ? 24 : 22;
+        g.enemies[i].height = low ? 20 : 22;
         g.enemies[i].anchor_x = g.enemies[i].s.x;
         g.enemies[i].anchor_y = g.enemies[i].s.y;
         g.enemies[i].timer = 1.5;
