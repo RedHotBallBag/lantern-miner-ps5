@@ -122,7 +122,7 @@ main(int argc, char **argv)
     frames(200, 0, 0, "01_title.png"); /* past the loading splash */
     frames(2, PAD_DOWN, 0, NULL); /* no save yet: New Game, How to Play, High Scores, Settings, Exit */
     frames(2, PAD_CROSS, 0, NULL);
-    for (int p = 0; p < 6; p++) {
+    for (int p = 0; p < 7; p++) {
         char name[64];
         snprintf(name, sizeof(name), "02_help_%d.png", p + 1);
         frames(30, 0, 0, name);
@@ -146,16 +146,118 @@ main(int argc, char **argv)
     frames(2, 0, 0, "04_play_cavern1.png");
     {
         struct lm_game *gm = game();
-        gm->player.spring = 8;
+        gm->power_time[PU_SPRING_BOOTS] = 8;
+        gm->power_time[PU_STARLIGHT_MAGNET] = 6;
+        gm->powers[PU_CLOCKWORK_SLOW] = 1;
         gm->player.has_shield = true;
-        gm->player.magnet = 5;
         gm->perks[PERK_BRASS_LANTERN] = 1;
-        gm->perks[PERK_GEM_RESONANCE] = 2;
+        gm->perks[PERK_GEM_RESONANCE] = 1;
         gm->relic_points = 1250;
         gm->score = 12340;
     }
     play(0.6, PAD_RIGHT, true);
     frames(2, 0, 0, "05_play_powerups.png");
+
+    {
+        struct lm_game *gm = game();
+        frames(2, PAD_CIRCLE, 0, NULL);
+        frames(20, 0, 0, "05b_effects.png");
+        gm->player.lead = 6;
+        gm->player.muddle = 6;
+        frames(10, 0, 0, "05c_curses.png");
+        fprintf(stderr, "[test] circle: slow carried=%d running=%.1f\n", gm->powers[PU_CLOCKWORK_SLOW], gm->power_time[PU_CLOCKWORK_SLOW]);
+    }
+
+    /* the spider in its first cavern drops when walked under, then climbs home */
+    app_debug_start(g.app, "KETTLE-417", 5);
+    {
+        struct lm_game *gm = game();
+        for (int i = 0; i < gm->n_enemies; i++) {
+            if (gm->enemies[i].s.kind != EN_SPIDER)
+                continue;
+            double home = gm->enemies[i].s.y, low = home;
+            gm->banner.active = false;
+            for (int n = 0; n < 150; n++) {
+                gm->player.invuln = 3600;
+                gm->player.x = gm->enemies[i].s.x;
+                frames(1, 0, 0, n == 55 ? "05d_spider.png" : NULL);
+                if (gm->enemies[i].s.y > low)
+                    low = gm->enemies[i].s.y;
+            }
+            gm->player.x = 40;
+            frames(400, 0, 0, NULL);
+            fprintf(stderr, "[test] spider: home %.0f lowest %.0f floor %.0f back at %.0f\n", home, low, gm->enemies[i].s.max_y,
+                    gm->enemies[i].s.y);
+        }
+        /* the chest is not the same every time */
+        int seen = 0, kinds = 0;
+        for (int n = 0; n < 60; n++) {
+            app_debug_start(g.app, "SAME", 5);
+            for (int i = 0; i < game()->cavern.n_collect; i++)
+                if (game()->cavern.collect[i].kind == COL_CHEST) {
+                    seen++;
+                    kinds |= 1 << game()->cavern.collect[i].powerup;
+                }
+        }
+        fprintf(stderr, "[test] chests: %d of 60 loads had one, kinds bitmask %x\n", seen, kinds);
+    }
+    app_debug_start(g.app, "HEARTH-101", 1);
+    frames(100, 0, 0, NULL);
+
+    /* a splash costs a heart and throws the miner out; going straight back in costs another */
+    {
+        struct lm_game *gm = NULL;
+        int col = -1, cav = 0;
+        while (col < 0 && cav < 20) {
+            app_debug_start(g.app, "HEARTH-101", ++cav);
+            gm = game();
+            for (int c = 1; c < GRID_COLS - 2 && col < 0; c++)
+                if (gm->cavern.tiles[16][c] == T_PIT && gm->cavern.tiles[16][c + 1] == T_PIT && gm->cavern.tiles[16][c + 2] == T_PIT)
+                    col = c;
+        }
+        gm->n_enemies = 0;
+        gm->banner.active = false;
+        gm->player.invuln = 0;
+        gm->player.x = col * TILE_SIZE + 35;
+        gm->player.y = 16 * TILE_SIZE - 40;
+        gm->player.vx = 0;
+        gm->player.vy = 100;
+        gm->player.fall_top = gm->player.y;
+        int lives = gm->lives, hearts = gm->hearts;
+        double top = 1e9;
+        for (int n = 0; n < 40; n++) {
+            frames(1, 0, 0, n == 25 ? "05e_splash.png" : NULL);
+            if (gm->player.y + gm->player.height < top)
+                top = gm->player.y + gm->player.height;
+        }
+        fprintf(stderr, "[test] splash: cavern %d hearts %d -> %d, feet rose to %.0f (pit top %d)\n", cav, hearts, gm->hearts, top, 16 * TILE_SIZE);
+        /* nothing to land on this time, so back in it goes */
+        for (int row = 0; row < 16; row++)
+            for (int c = 1; c < GRID_COLS - 1; c++)
+                gm->cavern.tiles[row][c] = T_EMPTY;
+        gm->n_movers = 0;
+        gm->player.invuln = 0;
+        gm->hearts = hearts;
+        gm->player.bouncing = false;
+        gm->player.x = col * TILE_SIZE + 35;
+        gm->player.y = 16 * TILE_SIZE - 40;
+        gm->player.vx = 0;
+        gm->player.vy = 100;
+        gm->player.fall_top = gm->player.y;
+        frames(100, 0, 0, NULL);
+        fprintf(stderr, "[test] second splash: lives %d -> %d, hearts %d, down for %.1f\n", lives, gm->lives, gm->hearts, gm->respawn_timer);
+    }
+    app_debug_start(g.app, "HEARTH-101", 22);
+    {
+        struct lm_game *gm = game();
+        gm->powers[PU_SPRING_BOOTS] = gm->powers[PU_STARLIGHT_MAGNET] = gm->powers[PU_CLOCKWORK_SLOW] = 1;
+        gm->relic_points = 14300;
+        frames(150, 0, 0, "05f_buttons.png");
+        frames(2, PAD_TRIANGLE, 0, NULL);
+        frames(20, 0, 0, "05g_buttons_one_on.png");
+    }
+    app_debug_start(g.app, "HEARTH-101", 1);
+    frames(100, 0, 0, NULL);
 
     /* pause */
     frames(2, PAD_OPTIONS, 0, NULL);
@@ -195,7 +297,7 @@ main(int argc, char **argv)
     game()->flawless = false;
     {
         struct lm_game *gm = game();
-        gm->relic_points = 3000;
+        gm->relic_points = 9000;
         gm->hearts = 2;
         gm->keys_collected = gm->cavern.keys_total;
         gm->portal_unlocked = true;
@@ -207,9 +309,12 @@ main(int argc, char **argv)
     frames(120, 0, 0, NULL);
     fprintf(stderr, "[test] screen after portal: %d (3 = shop)\n", app_debug_screen(g.app));
     frames(60, 0, 0, "09_shop.png");
-    frames(2, PAD_CROSS, 0, NULL); /* buy Spring Boots (900) */
+    frames(2, PAD_LEFT, 0, NULL);
+    frames(2, PAD_LEFT, 0, NULL); /* from the Tea Thermos to Spring Boots */
+    frames(2, PAD_CROSS, 0, NULL); /* buy it */
+    frames(2, PAD_CROSS, 0, NULL); /* a second one must be refused */
     frames(2, PAD_RIGHT, 0, NULL);
-    frames(2, PAD_CROSS, 0, NULL); /* buy Lantern Shield (1300) */
+    frames(2, PAD_CROSS, 0, NULL); /* buy Lantern Shield */
     frames(30, 0, 0, "10_shop_bought.png");
     fprintf(stderr, "[test] powers: spring=%d shield=%d points left=%d\n", game()->powers[PU_SPRING_BOOTS], game()->powers[PU_LANTERN_SHIELD], game()->relic_points);
     frames(2, PAD_L1, 0, NULL);
@@ -221,7 +326,10 @@ main(int argc, char **argv)
     frames(2, PAD_CROSS, 0, NULL);
     frames(40, 0, 0, "12_after_shop.png");
 
-    frames(60, 0, 0, "12b_run_with_powers.png");
+    frames(150, 0, 0, "12b_run_with_powers.png");
+    frames(2, PAD_SQUARE, 0, NULL);
+    frames(20, 0, 0, "12bb_spring_on.png");
+    fprintf(stderr, "[test] square: spring carried=%d running=%.1f\n", game()->powers[PU_SPRING_BOOTS], game()->power_time[PU_SPRING_BOOTS]);
     /* a packed Tea Thermos saves the run once */
     game()->powers[PU_TEA_THERMOS] = 1;
     game()->air = 0.02;
@@ -299,6 +407,173 @@ main(int argc, char **argv)
     frames(40, 0, 0, NULL);
     frames(2, PAD_CROSS, 0, NULL);
     frames(40, 0, 0, "17_the_end.png");
+
+    /* World 2: every cavern at low water and at high */
+    for (int d = 11; d <= 20; d++) {
+        char name[64];
+        app_debug_start(g.app, "WET", d);
+        struct lm_game *gm = game();
+        gm->player.invuln = 3600;
+        snprintf(name, sizeof(name), "w2_%02d.png", d);
+        frames(130, 0, 0, name);
+        struct lm_tide const *t = &gm->cavern.tide;
+        if (t->on && t->low_y > t->high_y) {
+            gm->tide_clock = t->low_secs + TIDE_WARNING + (t->low_y - t->high_y) / TIDE_SPEED + 0.5;
+            gm->player.invuln = 3600;
+            gm->player.y = 40;
+            gm->player.vy = 0;
+            snprintf(name, sizeof(name), "w2_%02d_high.png", d);
+            frames(20, 0, 0, name);
+            gm->tide_clock = t->low_secs + 0.6;
+            snprintf(name, sizeof(name), "w2_%02d_warn.png", d);
+            frames(8, 0, 0, d == 11 ? name : NULL);
+        }
+    }
+    /* cavern pictures for the README */
+    static int const pictured[4] = {9, 10, 12, 19};
+    for (int i = 0; i < 4; i++) {
+        char name[64];
+        app_debug_start(g.app, "PIC", pictured[i]);
+        game()->player.invuln = 3600;
+        snprintf(name, sizeof(name), "level_%02d.png", pictured[i]);
+        frames(130, 0, 0, name);
+    }
+    /* the first rise comes the same short while after any water cavern appears */
+    for (int d = 11; d <= 20; d += 5) {
+        app_debug_start(g.app, "WET", d);
+        struct lm_game *gm = game();
+        int n = 0;
+        while (gm->tide_phase != TIDE_RISING && n < 1200) {
+            gm->player.invuln = 3600;
+            frames(1, 0, 0, NULL);
+            n++;
+        }
+        fprintf(stderr, "[test] first rise: cavern %d after %.1f s\n", d, n / 60.0);
+    }
+    /* the flood takes a heart from anyone left on the floor */
+    app_debug_start(g.app, "WET", 11);
+    {
+        struct lm_game *gm = game();
+        gm->n_enemies = 0;
+        gm->banner.active = false;
+        gm->player.invuln = 0;
+        gm->player.x = 12 * TILE_SIZE;
+        gm->player.y = 17 * TILE_SIZE - 26;
+        gm->player.fall_top = gm->player.y;
+        double t0 = gm->tide_clock;
+        int h = gm->hearts;
+        while (gm->hearts == h && gm->tide_clock - t0 < 40)
+            frames(1, 0, 0, NULL);
+        fprintf(stderr, "[test] tide: hit after %.1f s with water at %.0f\n", gm->tide_clock, gm->water_y);
+        frames(14, 0, 0, "w2_splash.png");
+    }
+    /* a raft holds for a moment, then goes under */
+    app_debug_start(g.app, "WET", 12);
+    {
+        struct lm_game *gm = game();
+        gm->n_enemies = 0;
+        gm->banner.active = false;
+        gm->player.invuln = 0;
+        gm->player.x = gm->movers[0].x + 30;
+        gm->player.y = gm->movers[0].y - 28;
+        gm->player.vy = 0;
+        gm->player.fall_top = gm->player.y;
+        int h = gm->hearts, n = 0;
+        frames(75, 0, 0, "w2_raft.png");
+        for (n = 75; n < 400 && gm->hearts == h; n++)
+            frames(1, 0, 0, NULL);
+        fprintf(stderr, "[test] raft: went under after %.2f s, hearts %d -> %d\n", n / 60.0, h, gm->hearts);
+    }
+    /* the plugs */
+    app_debug_start(g.app, "WET", 19);
+    {
+        struct lm_game *gm = game();
+        gm->n_enemies = 0;
+        gm->banner.active = false;
+        for (int pull = 0; pull < 2; pull++) {
+            int left = pull;
+            for (int i = 0; i < gm->cavern.n_collect; i++)
+                if (gm->cavern.collect[i].kind == COL_PLUG && !gm->cavern.collect[i].collected && left-- <= 0 + pull) {
+                    gm->player.invuln = 3600;
+                    gm->player.x = gm->cavern.collect[i].x - 10;
+                    gm->player.y = gm->cavern.collect[i].y - 13;
+                    gm->player.vy = 0;
+                    gm->player.fall_top = gm->player.y;
+                    break;
+                }
+            frames(20, 0, 0, NULL);
+            gm->player.x = 40;
+            gm->player.y = 40;
+            gm->player.vy = 0;
+            gm->player.fall_top = 40;
+            frames(280, 0, 0, pull ? "w2_19_drained2.png" : "w2_19_drained1.png");
+            fprintf(stderr, "[test] plug %d: water now %.0f\n", pull + 1, gm->water_y);
+        }
+    }
+    /* a fish leaps and falls back */
+    app_debug_start(g.app, "WET", 11);
+    {
+        struct lm_game *gm = game();
+        gm->banner.active = false;
+        for (int i = 0; i < gm->n_enemies; i++) {
+            if (gm->enemies[i].s.kind != EN_FISH)
+                continue;
+            double top = 1e9;
+            int shot = 0;
+            for (int n = 0; n < 420; n++) {
+                gm->player.invuln = 3600;
+                gm->tide_clock = gm->cavern.tide.low_secs + TIDE_WARNING + 2; /* held at high water */
+                frames(1, 0, 0, !shot && gm->enemies[i].is_charging && gm->enemies[i].vy > -120 ? (shot = 1, "w2_fish.png") : NULL);
+                if (gm->enemies[i].s.y < top)
+                    top = gm->enemies[i].s.y;
+            }
+            fprintf(stderr, "[test] fish: leapt to %.0f (asked for %.0f)\n", top, gm->enemies[i].anchor_y);
+            break;
+        }
+    }
+    /* Cavern Select must leave the real save alone */
+    app_debug_start(g.app, "REAL", 7);
+    frames(10, 0, 0, NULL);
+    frames(2, PAD_OPTIONS, 0, NULL);
+    for (int i = 0; i < 4; i++)
+        frames(2, PAD_DOWN, 0, NULL);
+    frames(2, PAD_CROSS, 0, NULL); /* Save & Quit */
+    frames(20, 0, 0, "w2_title.png");
+    {
+        char path[600], before[2048] = "", after[2048] = "";
+        snprintf(path, sizeof(path), "%s/run.sav", argv[1]);
+        FILE *f = fopen(path, "r");
+        if (f) {
+            size_t n = fread(before, 1, sizeof(before) - 1, f);
+            before[n] = 0;
+            fclose(f);
+        }
+        app_debug_goto(g.app, 10);
+        frames(30, 0, 0, NULL);
+        frames(2, PAD_SQUARE, 0, NULL);
+        for (int i = 0; i < 14; i++)
+            frames(2, PAD_DOWN, 0, NULL);
+        frames(20, 0, 0, "w2_select.png");
+        frames(2, PAD_CROSS, 0, NULL);
+        frames(200, 0, 0, "w2_practice.png");
+        fprintf(stderr, "[test] practice: cavern %d practice %d lives %d spring %d\n", game()->depth, game()->practice, game()->lives,
+                game()->powers[PU_SPRING_BOOTS]);
+        game()->air = 0.02;
+        frames(120, 0, 0, NULL);
+        frames(2, PAD_OPTIONS, 0, NULL);
+        for (int i = 0; i < 4; i++)
+            frames(2, PAD_DOWN, 0, NULL);
+        frames(2, PAD_CROSS, 0, NULL);
+        frames(20, 0, 0, NULL);
+        f = fopen(path, "r");
+        if (f) {
+            size_t n = fread(after, 1, sizeof(after) - 1, f);
+            after[n] = 0;
+            fclose(f);
+        }
+        fprintf(stderr, "[test] practice: back on screen %d (10 = list), real save %s (%d bytes)\n", app_debug_screen(g.app),
+                strcmp(before, after) ? "CHANGED" : "untouched", (int)strlen(before));
+    }
 
     g_audio_run = 0;
     pthread_join(audio, NULL);

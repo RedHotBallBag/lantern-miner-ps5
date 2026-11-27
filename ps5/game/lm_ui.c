@@ -406,15 +406,6 @@ ui_item_icon(struct vkr *r, int item, float cx, float cy, float s, uint32_t col)
         vkr_ring(r, cx, cy - 9 * u, 7 * u, 6 * u, 3 * u, 1.8f * u, c);
         vkr_circle(r, cx, cy + 2 * u, 3.5f * u, HEX(0xfff6d1));
         break;
-    case SHOP_DELVERS_CACHE: /* satchel */
-        vkr_rrect(r, cx - 10 * u, cy - 5 * u, 20 * u, 16 * u, 3 * u, c);
-        vkr_ring(r, cx, cy - 7 * u, 7 * u, 6 * u, 3 * u, 2 * u, c);
-        vkr_rect(r, cx - 2 * u, cy - 1 * u, 4 * u, 5 * u, HEX(C_PANEL));
-        break;
-    case SHOP_PHOENIX_FEATHER: /* flame feather */
-        vkr_poly(r, (float[]){cx - 8 * u, cy + 11 * u, cx - 7 * u, cy - 1 * u, cx - 1 * u, cy - 12 * u, cx + 3 * u, cy - 4 * u, cx + 10 * u, cy - 8 * u, cx + 6 * u, cy + 4 * u, cx - 2 * u, cy + 10 * u}, 7, c);
-        vkr_line(r, cx - 8 * u, cy + 12 * u, cx + 4 * u, cy - 8 * u, 1.6f * u, HEX(0xfff6d1));
-        break;
     case SHOP_CHRONOMETER: /* clock */
     default:
         vkr_circle_ring(r, cx, cy, 10 * u, 2.4f * u, c);

@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lantern Miner</h1>
-<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.9.2</b> (Build 16) · <code>PPSA58001</code></p>
+<p align="center">A cavern platformer for jailbroken PS5 · <b>Beta v0.10.0</b> (Build 19) · <code>PPSA58001</code></p>
 
 ![Title screen](docs/screenshots/01_title.png)
 
@@ -15,8 +15,9 @@ It's written in C with Vulkan.
 
 ## It's a beta
 
-So far there's **one finished world** (ten caverns) plus **13 extra caverns** after it. The plan is 50 caverns across five
-worlds, with water, ice, wind and fire still to come. I'll keep building it, so let me know if anything's odd or unfair.
+So far there are **two finished worlds** (twenty caverns, the second one flooded) plus **8 extra caverns** after them. The
+plan is 50 caverns across five worlds, with ice, wind and fire still to come. I'll keep building it, so let me know if
+anything's odd or unfair.
 
 What's new in each version is in the [change log](CHANGELOG.md).
 
@@ -26,10 +27,11 @@ Grab all the keys, get to the door and head down to the next cavern. Sounds easy
 
 - **Your air runs out**, and fast. There's only one air bottle in each cavern
 - **Mind the drop.** Fall too far and you lose a life
-- **Eight kinds of guardian**, from clockwork beetles to a stalker that follows you through walls
-- Ladders, lifts, moving platforms, conveyors, crumbling ledges, brambles and deep water
+- **Ten kinds of guardian**, from clockwork beetles to leaping fish and drop spiders
+- Ladders, lifts, moving platforms, conveyors, crumbling ledges and brambles
+- **World 2 is flooded**: rising tides, rafts that sink if you linger, and a plug you really shouldn't pull
 - **Chests are a gamble.** Some are treats, some give you lead boots, muddle your controls, leak your air or set something on you
-- **Old Barnaby's shop** every 5th cavern, with new stock each visit
+- **Old Barnaby's shop** every 5th cavern, with new stock each visit and powers you save for the right moment
 - **Lives are a luxury.** You get 5, with 2 hearts each, and buying more costs a fortune
 - Continues are rare: buy one, find one, or clear a whole world without dying
 - Daft room names in the old tradition, like *Pulley Inspector Found in Marmalade*
@@ -40,6 +42,8 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 ![The Pulley House](docs/screenshots/level_09.png)
 ![Tea With the Mayor's Spare Head](docs/screenshots/level_10.png)
 ![The guardians](docs/screenshots/02_help_3.png)
+![Mrs Nuttall's Sinking Feeling](docs/screenshots/level_12.png)
+![Do Not Pull the Archbishop's Plug](docs/screenshots/level_19.png)
 ![The shop](docs/screenshots/09_shop.png)
 
 ## Controls
@@ -47,7 +51,8 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 | Action | Button |
 | --- | --- |
 | Move | D-pad or left stick |
-| Jump | Any face button, shoulder or trigger (hold to jump higher) |
+| Jump | ✕, or any shoulder or trigger (hold to jump higher) |
+| Spring Boots / Magnet / Slow | □ / △ / ○ (once you're carrying one) |
 | Climb ladders | Up / Down |
 | Pause | Options |
 | Mute | R3 |
@@ -57,7 +62,7 @@ Stuck? There's a **How to Play** screen on the title and pause menus, with a key
 
 ## Install
 
-1. Download `LanternMiner-v0.9.2-beta.zip` from **Releases** and unzip it.
+1. Download `LanternMiner-v0.10.0-beta.zip` from **Releases** and unzip it.
 2. Copy the `PPSA58001` folder to `/data/homebrew/` on your PS5.
 3. Launch it and enjoy (or don't, and throw the pad).
 
@@ -65,7 +70,7 @@ Saves live in `/data/lantern-miner/`.
 
 ## Buy me a coffee
 
-If you're enjoying it, or you just want me to hurry up with World 2, you can
+If you're enjoying it, or you just want me to hurry up with World 3, you can
 [buy me a coffee](https://www.buymeacoffee.com/superfurry). Scan the code or click it.
 
 <a href="https://www.buymeacoffee.com/superfurry"><img src="docs/buy-me-a-coffee.png" width="220" alt="Buy me a coffee QR code"></a>

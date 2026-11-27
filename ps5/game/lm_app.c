@@ -24,10 +24,10 @@
 
 struct app;
 static void scores_load(struct app *a);
-enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES, SC_CONTINUE, SC_HELP };
+enum { SC_TITLE = APP_SC_TITLE, SC_PLAY, SC_PAUSE, SC_SHOP, SC_OVER, SC_SETTINGS, SC_NAME, SC_SCORES, SC_CONTINUE, SC_HELP, SC_LEVELS };
 enum { IMG_TITLE, IMG_CAMP, IMG_SHOP, IMG_QR, IMG_COUNT };
 
-#define JUMP_BUTTONS (PAD_CROSS | PAD_CIRCLE | PAD_SQUARE | PAD_TRIANGLE | PAD_R1 | PAD_L1 | PAD_R2 | PAD_L2)
+#define JUMP_BUTTONS (PAD_CROSS | PAD_R1 | PAD_L1 | PAD_R2 | PAD_L2) /* the other face buttons start powers */
 
 struct settings {
     int music, sfx;   /* 0..10 */
@@ -72,13 +72,15 @@ struct app {
     /* title */
     int title_sel;
     float menu_anim[8];
+    int level_sel;
+    bool level_stocked; /* Cavern Select: start with every power and plenty of points */
     struct dust dust[80];
 
     /* pause / over / settings / shop */
     int pause_sel, over_sel, set_sel;
     float row_anim[16];
-    int shop_sel, shop_page; /* page 0 = powers and lives, 1 = supplies and gear, 2 = special wares */
-    int shop_air_bonus;
+    int shop_sel, shop_page; /* page 0 = powers and lives, 1 = supplies and gear */
+    int shop_air_bonus, shop_relic_bonus;
     char shop_line[220];
     double shop_line_t;
     double shop_flash[SHOP_COUNT];
@@ -175,7 +177,7 @@ static void
 save_run(struct app *a)
 {
     char p[300], tmp[310];
-    if (!a->run_active)
+    if (!a->run_active || a->g.practice) /* a test run must never touch the real save */
         return;
     data_path(a, "run.sav", p, sizeof(p));
     snprintf(tmp, sizeof(tmp), "%s.tmp", p);
@@ -197,6 +199,8 @@ end_run(struct app *a)
 {
     char p[300];
     a->run_active = false;
+    if (a->g.practice)
+        return;
     a->has_save = false;
     remove(data_path(a, "run.sav", p, sizeof(p)));
 }
@@ -205,7 +209,7 @@ static void
 start_run(struct app *a)
 {
     char seed[40];
-    snprintf(seed, sizeof(seed), "RUN-%06d", (int)(lm_rand(&a->g) * 1000000)); /* decides the chests */
+    snprintf(seed, sizeof(seed), "RUN-%06d", (int)(lm_rand(&a->g) * 1000000));
     lm_start_run(&a->g, seed);
     a->jump_lock = true;
     a->run_t0 = a->now;
@@ -217,6 +221,19 @@ start_run(struct app *a)
 
 static void open_shop(struct app *a);
 static void open_help(struct app *a);
+
+/* Back to the list after a test run, with the real records put back. */
+static void
+leave_practice(struct app *a)
+{
+    a->run_active = false;
+    a->over_pending = false;
+    a->g.running = false;
+    a->g.events = 0;
+    lm_set_records(&a->g, a->st.high_score, a->st.best_depth);
+    lm_audio_set_music_mode(MUSIC_TITLE, 1.0);
+    go(a, SC_LEVELS);
+}
 
 static void
 resume_run(struct app *a)
@@ -442,6 +459,7 @@ static void
 open_shop(struct app *a)
 {
     a->shop_air_bonus = a->g.adv.air_bonus;
+    a->shop_relic_bonus = a->shop_air_bonus > 0 ? a->g.adv.relic_bonus : 0;
     a->shop_sel = SHOP_TEA_THERMOS;
     a->shop_page = 0;
     if (a->g.flawless_award)
@@ -462,6 +480,15 @@ process_events(struct app *a)
     struct lm_game *g = &a->g;
     unsigned ev = g->events;
     g->events = 0;
+    if (g->practice) { /* nothing is recorded */
+        if (ev & EV_OPEN_SHOP)
+            open_shop(a);
+        if (ev & (EV_CONTINUE | EV_GAME_OVER)) {
+            a->over_pending = true;
+            a->over_timer = 1.1;
+        }
+        return;
+    }
     if (ev & EV_CAVERN_ADVANCED) {
         if (g->adv.total_score > a->st.high_score) a->st.high_score = g->adv.total_score;
         if (g->adv.depth_cleared + 1 > a->st.best_depth) a->st.best_depth = g->adv.depth_cleared + 1;
@@ -548,7 +575,15 @@ hintbar(struct vkr *r, int n, int const *glyphs, char const *const *labels)
 /* title-art lantern positions in the 1376x768 source image */
 static float const k_title_lanterns[7][2] = {{132, 172}, {989, 150}, {876, 202}, {1241, 168}, {463, 530}, {696, 662}, {619, 617}};
 
-enum { TM_CONTINUE, TM_NEW, TM_HELP, TM_SCORES, TM_SETTINGS, TM_EXIT, TM_COUNT };
+enum { TM_CONTINUE, TM_NEW, TM_HELP, TM_SCORES, TM_SETTINGS, TM_LEVELS, TM_EXIT, TM_COUNT };
+
+/* the entry under the cursor, allowing for the ones that are not shown */
+static int
+title_entry(struct app const *a)
+{
+    int e = a->title_sel + (a->has_save ? 0 : 1);
+    return !LM_TEST_MENU && e >= TM_LEVELS ? e + 1 : e;
+}
 
 /* The title menu depends on whether there is a run to continue. Fills the labels; returns how many. */
 static int
@@ -561,6 +596,8 @@ title_menu(struct app const *a, char const **labels)
     labels[n++] = "How to Play";
     labels[n++] = "High Scores";
     labels[n++] = "Settings";
+    if (LM_TEST_MENU)
+        labels[n++] = "Cavern Select (testing)";
     labels[n++] = "Exit to Home";
     return n;
 }
@@ -629,7 +666,7 @@ draw_title(struct app *a, struct vkr *r, double dt)
     /* menu */
     char const *labels[TM_COUNT];
     int count = title_menu(a, labels);
-    float mx = 120, my = 548, mw = 560, mh = 56, gap = 8;
+    float mx = 120, my = LM_TEST_MENU ? 524 : 548, mw = 560, mh = LM_TEST_MENU ? 52 : 56, gap = 8;
     for (int i = 0; i < count; i++) {
         float y = my + i * (mh + gap);
         ui_button(r, mx, y, mw, mh, labels[i], sel == i, i == 0, a->menu_anim[i], t);
@@ -730,18 +767,16 @@ draw_hud(struct app *a, struct vkr *r)
         ui_text_r(r, VKR_MONO_BOLD, 24, rx, 14, HEX(0xb45cff), b);
         rx -= ui_text_w(r, VKR_MONO_BOLD, 24, b) + 28;
     }
-    /* owned Lantern Powers */
+    /* Lantern Powers that look after themselves */
     {
         struct lm_player const *p = &g->player;
         for (int i = PU_COUNT - 1; i >= 0; i--) {
-            if (g->powers[i] <= 0)
-                continue;
+            if (i == PU_SPRING_BOOTS || i == PU_STARLIGHT_MAGNET || i == PU_CLOCKWORK_SLOW || g->powers[i] <= 0)
+                continue; /* the button powers live along the bottom */
             if (i == PU_LANTERN_SHIELD)
                 snprintf(b, sizeof(b), p->has_shield ? "Shield +%d" : "Shield \xe2\x80\x94 +%d", g->powers[i]);
-            else if (i == PU_TEA_THERMOS)
-                snprintf(b, sizeof(b), "Tea \xc3\x97%d", g->powers[i]);
             else
-                snprintf(b, sizeof(b), "%s x%d %ds", lm_powerups[i].short_label, g->powers[i], (int)(g->power_time[i] + 0.99));
+                snprintf(b, sizeof(b), "Tea \xc3\x97%d", g->powers[i]);
             ui_text_r(r, VKR_MONO_BOLD, 24, rx, 14, HEX(lm_powerups[i].color), b);
             rx -= ui_text_w(r, VKR_MONO_BOLD, 24, b) + 28;
         }
@@ -778,10 +813,7 @@ draw_hud(struct app *a, struct vkr *r)
     for (int p = 0; p < PERK_COUNT; p++) {
         if (g->perks[p] <= 0)
             continue;
-        if (g->perks[p] > 1)
-            snprintf(b, sizeof(b), "%s x%d", lm_perks[p].short_label, g->perks[p]);
-        else
-            snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
+        snprintf(b, sizeof(b), "%s", lm_perks[p].short_label);
         if (lx + ui_text_w(r, VKR_SANS_BOLD, 22, b) > rx)
             break;
         ui_text(r, VKR_SANS_BOLD, 22, lx, 17, HEX(lm_perks[p].accent), b);
@@ -813,31 +845,57 @@ draw_hud(struct app *a, struct vkr *r)
         vkr_ring(r, bx, by, bw, 18, 5, 1.5f, HEXA(C_CREAM, 0.14));
     }
     {
-        float x = 1868;
+        /* points over the shop count, tucked into the corner */
         int until = lm_cavern_until_shop(g);
         if (until == 0) {
-            ui_text_r(r, VKR_MONO_BOLD, 24, x, 1031, HEX(C_GREEN), "Shop After Portal");
-            x -= ui_text_w(r, VKR_MONO_BOLD, 24, "Shop After Portal") + 26;
+            ui_text_r(r, VKR_MONO_BOLD, 24, 1868, 1046, HEX(C_GREEN), "Shop After Portal");
         } else {
             snprintf(b, sizeof(b), "Shop in %d", until);
-            ui_text_r(r, VKR_MONO, 24, x, 1031, HEX(C_MUTED), b);
-            x -= ui_text_w(r, VKR_MONO, 24, b) + 26;
+            ui_text_r(r, VKR_MONO, 24, 1868, 1046, HEX(C_MUTED), b);
         }
+        float x = 1868;
+        ui_text_r(r, VKR_MONO, 22, x, 1018, HEX(C_MUTED), "Relic Pts");
+        x -= ui_text_w(r, VKR_MONO, 22, "Relic Pts") + 10;
         lm_fmt_int(b, sizeof(b), g->relic_points);
-        ui_text_r(r, VKR_MONO_BOLD, 26, x, 1030, HEX(C_YELLOW), b);
-        x -= ui_text_w(r, VKR_MONO_BOLD, 26, b) + 10;
-        ui_text_r(r, VKR_MONO, 22, x, 1034, HEX(C_MUTED), "Relic Pts");
-        x -= ui_text_w(r, VKR_MONO, 22, "Relic Pts") + 30;
+        ui_text_r(r, VKR_MONO_BOLD, 26, x, 1014, HEX(C_YELLOW), b);
     }
+    float title_end;
     {
-        /* the room's name, centred between the air bar and the shop count */
+        /* the room's name, between the air bar and the power buttons */
         float size = 36, w = ui_text_w(r, VKR_DISPLAY_SEMI, size, g->cavern.name);
-        if (w > 650) {
-            size *= 650 / w;
+        if (w > 500) {
+            size *= 500 / w;
             w = ui_text_w(r, VKR_DISPLAY_SEMI, size, g->cavern.name);
         }
-        vkr_rrect(r, 1010 - w / 2 - 22, 1022, w + 44, 52, 10, HEXA(0x000000, 0.82));
-        ui_text_c(r, VKR_DISPLAY_SEMI, size, 1010, 1028 + (36 - size) * 0.5f, HEX(C_YELLOW), g->cavern.name);
+        vkr_rrect(r, 920 - w / 2 - 22, 1022, w + 44, 52, 10, HEXA(0x000000, 0.82));
+        ui_text_c(r, VKR_DISPLAY_SEMI, size, 920, 1028 + (36 - size) * 0.5f, HEX(C_YELLOW), g->cavern.name);
+        title_end = 920 + w / 2 + 22;
+    }
+    {
+        /* each power held, with the button that starts it; once running, the seconds left */
+        static int const held[3] = {PU_SPRING_BOOTS, PU_STARLIGHT_MAGNET, PU_CLOCKWORK_SLOW};
+        static int const button[3] = {G_SQUARE, G_TRIANGLE, G_CIRCLE};
+        float x = title_end + 18;
+        for (int i = 0; i < 3; i++) {
+            int pu = held[i];
+            char const *name = lm_powerups[pu].short_label;
+            bool running = g->power_time[pu] > 0;
+            if (!running && g->powers[pu] <= 0)
+                continue;
+            float w;
+            if (running) {
+                snprintf(b, sizeof(b), "%s %ds", name, (int)(g->power_time[pu] + 0.99));
+                w = ui_text_w(r, VKR_MONO_BOLD, 24, b);
+            } else {
+                w = ui_hint_w(r, button[i], name, 30);
+            }
+            vkr_rrect(r, x, 1022, w + 24, 52, 10, HEXA(0x000000, 0.82));
+            if (running)
+                ui_text(r, VKR_MONO_BOLD, 24, x + 12, 1033, HEX(lm_powerups[pu].color), b);
+            else
+                ui_hint(r, button[i], x + 12, 1048, name, 30);
+            x += w + 34;
+        }
     }
 
     /* first seconds: how to play */
@@ -880,9 +938,10 @@ draw_pause(struct app *a, struct vkr *r)
     ui_text_c(r, VKR_MONO, 26, 960, py + 40, HEX(C_AMBER), b);
     ui_text_c(r, VKR_DISPLAY, 76, 960, py + 80, HEX(C_CREAM), "Lantern Paused");
     ui_spectrum_rule(r, px + 160, py + 184, pw - 320, 5, 0.9f);
-    ui_text_c(r, VKR_MONO, 24, 960, py + 206, HEX(C_MUTED), "Your progress is saved after every cavern");
+    ui_text_c(r, VKR_MONO, 24, 960, py + 206, HEX(C_MUTED),
+              g->practice ? "Test run: nothing is saved" : "Your progress is saved after every cavern");
 
-    static char const *const labels[5] = {"Resume Expedition", "Settings", "Sound: On", "How to Play", "Save & Quit to Title"};
+    char const *labels[5] = {"Resume Expedition", "Settings", "Sound: On", "How to Play", g->practice ? "Back to Cavern Select" : "Save & Quit to Title"};
     for (int i = 0; i < 5; i++) {
         char lab[48];
         snprintf(lab, sizeof(lab), "%s", i == 2 ? (a->set.muted ? "Sound: Off" : "Sound: On") : labels[i]);
@@ -893,13 +952,11 @@ draw_pause(struct app *a, struct vkr *r)
     hintbar(r, 4, gl, lb);
 }
 
-/* Shop layout: page 0 = Lantern Powers (5 items, rows of 3 + 2), page 1 = supplies and gear (3 shelves of 3). */
+/* Shop layout, rows of three: page 0 = Lantern Powers and lives (7 items), page 1 = supplies and gear (9). */
 static void
 shop_pos(int item, int *page, int *row, int *col)
 {
-    if (item >= SHOP_DELVERS_CACHE) {
-        *page = 2; *row = 0; *col = item - SHOP_DELVERS_CACHE;
-    } else if (item >= SHOP_SPRING_BOOTS) {
+    if (item >= SHOP_SPRING_BOOTS) {
         int k = item - SHOP_SPRING_BOOTS;
         *page = 0; *row = k / 3; *col = k % 3;
     } else {
@@ -910,13 +967,14 @@ shop_pos(int item, int *page, int *row, int *col)
 static int
 shop_rows(int page)
 {
-    return page == 0 ? 2 : page == 2 ? 1 : 3;
+    (void)page;
+    return 3;
 }
 
 static int
 shop_rowlen(int page, int row)
 {
-    return 3;
+    return page == 0 && row == 2 ? SHOP_COUNT - SHOP_SPRING_BOOTS - 6 : 3;
 }
 
 /* item at a grid position; the column is clamped to the length of that row */
@@ -926,7 +984,7 @@ shop_item_at(int page, int row, int col)
     int len = shop_rowlen(page, row);
     if (col >= len)
         col = len - 1;
-    return page == 0 ? SHOP_SPRING_BOOTS + row * 3 + col : page == 2 ? SHOP_DELVERS_CACHE + col : row * 3 + col;
+    return (page == 0 ? SHOP_SPRING_BOOTS : 0) + row * 3 + col;
 }
 
 static void
@@ -950,6 +1008,8 @@ draw_shop(struct app *a, struct vkr *r)
         lm_fmt_int(c2, sizeof(c2), a->shop_air_bonus);
         snprintf(b + strlen(b), sizeof(b) - strlen(b), " \xc2\xb7 Air Bonus +%s", c2);
     }
+    if (a->shop_relic_bonus > 0)
+        snprintf(b + strlen(b), sizeof(b) - strlen(b), " \xc2\xb7 Relic Points +%d", a->shop_relic_bonus);
     ui_text(r, VKR_MONO, 26, 80, 20, HEX(C_GREEN), b);
     ui_text(r, VKR_DISPLAY, 58, 80, 46, HEX(C_CREAM), "Old Barnaby\xe2\x80\x99s Subterranean Stall");
     lm_fmt_int(c2, sizeof(c2), g->relic_points);
@@ -1002,10 +1062,7 @@ draw_shop(struct app *a, struct vkr *r)
     float gx = 780, gw = 1060, cwid = (gw - 2 * 22) / 3, chh = 214;
     if (a->shop_page == 0) {
         ui_text(r, VKR_DISPLAY_SEMI, 34, gx, 128, HEX(C_CREAM), "Lantern Powers & Lives");
-        ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Spring, Magnet and Slow are timed: buy again to stack x2 / x3");
-    } else if (a->shop_page == 2) {
-        ui_text(r, VKR_DISPLAY_SEMI, 34, gx, 128, HEX(C_CREAM), "Special Wares");
-        ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Rare stock, and the only way to buy a Continue");
+        ui_text_r(r, VKR_SANS, 21, gx + gw, 140, HEX(C_DIM), "Carry one of each, and start it in a cavern when you like");
     } else {
         for (int tier = 0; tier < 3; tier++) {
             float sy = 128 + tier * 272;
@@ -1020,7 +1077,7 @@ draw_shop(struct app *a, struct vkr *r)
             continue;
         struct lm_shop_status st;
         lm_shop_item_status(g, i, &st);
-        float x = gx + col * (cwid + 22), y = page == 0 ? 174 + row * (chh + 28) : 128 + row * 272 + 46;
+        float x = gx + col * (cwid + 22), y = page == 0 ? 174 + row * (chh + 26) : 128 + row * 272 + 46;
         bool sel = a->shop_sel == i;
         float lift = sel ? -6.0f : 0.0f;
         float fl = (float)lm_max(0, a->shop_flash[i]);
@@ -1046,9 +1103,9 @@ draw_shop(struct app *a, struct vkr *r)
     {
         char lab[64];
         float bw = 520, bh = 66, bx = gx + gw - bw, by = 944;
-        static char const *const tabs[3] = {"Powers", "Supplies", "Specials"};
-        float tw = 168;
-        for (int k = 0; k < 3; k++) {
+        static char const *const tabs[2] = {"Powers", "Supplies"};
+        float tw = 256;
+        for (int k = 0; k < 2; k++) {
             float tx = gx + k * (tw + 8);
             bool on = a->shop_page == k;
             vkr_rrect(r, tx, by, tw, bh, 14, on ? HEXA(C_AMBER, 0.95) : HEXA(C_PANEL2, 0.90));
@@ -1263,7 +1320,7 @@ update_title(struct app *a, struct app_input const *in)
         a->confirm_new = false;
     if (!(p & PAD_CROSS))
         return;
-    switch (a->title_sel + (a->has_save ? 0 : 1)) {
+    switch (title_entry(a)) {
     case TM_CONTINUE:
         lm_audio_ui_select();
         resume_run(a);
@@ -1291,6 +1348,10 @@ update_title(struct app *a, struct app_input const *in)
     case TM_SETTINGS:
         lm_audio_ui_select();
         go(a, SC_SETTINGS);
+        break;
+    case TM_LEVELS:
+        lm_audio_ui_select();
+        go(a, SC_LEVELS);
         break;
     default:
         save_all(a);
@@ -1338,7 +1399,10 @@ update_pause(struct app *a, struct app_input const *in)
         case 4:
             lm_set_paused(&a->g, true);
             save_run(a);
-            to_title(a);
+            if (a->g.practice)
+                leave_practice(a);
+            else
+                to_title(a);
             break;
         default:
             break;
@@ -1357,7 +1421,7 @@ update_shop(struct app *a, struct app_input const *in)
         int pg, row = 0, col = 0;
         if (sel < SHOP_COUNT)
             shop_pos(sel, &pg, &row, &col);
-        a->shop_page = page = (page + ((p & PAD_L1) ? 2 : 1)) % 3;
+        a->shop_page = page = !page;
         if (row >= shop_rows(page))
             row = shop_rows(page) - 1;
         sel = shop_item_at(page, row, col);
@@ -1400,12 +1464,11 @@ update_shop(struct app *a, struct app_input const *in)
             a->shop_flash[a->shop_sel] = 1.0;
             if (a->shop_sel == SHOP_CONTINUE)
                 snprintf(a->shop_line, sizeof(a->shop_line), "A Continue Lantern. Costly, I know. Pray you never need it!");
-            else if (it->tier == TIER_SPECIAL)
-                snprintf(a->shop_line, sizeof(a->shop_line), "Ha! The %s! I keep those for my best customers. Don\xe2\x80\x99t waste it!", it->name);
             else if (a->shop_sel == SHOP_EXTRA_LIFE)
                 snprintf(a->shop_line, sizeof(a->shop_line), "A spare lantern! That\xe2\x80\x99s %d lives now. The next one will cost you more.", a->g.lives);
-            else if (it->tier == TIER_POWER)
-                snprintf(a->shop_line, sizeof(a->shop_line), "The %s is yours. Mind the clock down there, it won\xe2\x80\x99t wait for you!", it->name);
+            else if (a->shop_sel == SHOP_SPRING_BOOTS || a->shop_sel == SHOP_STARLIGHT_MAGNET || a->shop_sel == SHOP_CLOCKWORK_SLOW)
+                snprintf(a->shop_line, sizeof(a->shop_line), "The %s is yours. Press %s down there when you want it. It only works the once!",
+                         it->name, a->shop_sel == SHOP_SPRING_BOOTS ? "Square" : a->shop_sel == SHOP_STARLIGHT_MAGNET ? "Triangle" : "Circle");
             else if (it->tier == TIER_MASTERWORK)
                 snprintf(a->shop_line, sizeof(a->shop_line), "By my beard\xe2\x80\x94the %s! You saved well for that heirloom. It\xe2\x80\x99ll serve you true in the deep dark.", it->name);
             else if (it->tier == TIER_GEAR)
@@ -1420,6 +1483,8 @@ update_shop(struct app *a, struct app_input const *in)
         }
     }
 }
+
+#include "lm_levelsel.inc"
 
 static void
 update_over(struct app *a, struct app_input const *in)
@@ -1456,6 +1521,8 @@ update_continue(struct app *a, struct app_input const *in)
         a->run_t0 = a->now - 100;
         go(a, SC_PLAY);
         save_run(a);
+    } else if (a->g.practice) {
+        leave_practice(a);
     } else {
         lm_give_up(&a->g);
         end_run(a);
@@ -1527,6 +1594,14 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
             go(a, SC_PAUSE);
             break;
         }
+        if (!a->over_pending) {
+            if (in->pressed & PAD_SQUARE)
+                lm_use_power(g, PU_SPRING_BOOTS);
+            if (in->pressed & PAD_TRIANGLE)
+                lm_use_power(g, PU_STARLIGHT_MAGNET);
+            if (in->pressed & PAD_CIRCLE)
+                lm_use_power(g, PU_CLOCKWORK_SLOW);
+        }
         lm_set_input(g, (in->held & PAD_LEFT) != 0, (in->held & PAD_RIGHT) != 0, (in->held & PAD_UP) != 0,
                      (in->held & PAD_DOWN) != 0, jump);
         break;
@@ -1554,6 +1629,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         break;
     case SC_HELP:
         update_help(a, in);
+        break;
+    case SC_LEVELS:
+        update_levels(a, in);
         break;
     }
 
@@ -1588,6 +1666,8 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
                 a->over_sel = 0;
                 if (a->g.down)
                     go(a, SC_CONTINUE);
+                else if (a->g.practice)
+                    leave_practice(a);
                 else
                     finish_run(a);
             }
@@ -1639,6 +1719,9 @@ app_frame(struct app *a, struct app_input const *in, double now, struct vkr *r)
         break;
     case SC_HELP:
         draw_help(a, r);
+        break;
+    case SC_LEVELS:
+        draw_levels(a, r);
         break;
     case SC_NAME:
         draw_name(a, r);

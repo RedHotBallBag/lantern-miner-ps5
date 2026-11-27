@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-enum { HELP_BASICS, HELP_ITEMS, HELP_FOES, HELP_HAZARDS, HELP_CHESTS, HELP_SHOP, HELP_PAGES };
+enum { HELP_BASICS, HELP_ITEMS, HELP_FOES, HELP_HAZARDS, HELP_WATER, HELP_CHESTS, HELP_SHOP, HELP_PAGES };
 
 struct help_row {
     int icon; /* enum lm_icon, or HELP_WARE(shop item) */
@@ -43,12 +43,12 @@ static struct help_row const help_foes[] = {
     {ICON_PISTON, "Piston", "Pumps up and down. Slip past when it moves away.", C_CYAN},
     {ICON_WISP, "Wisp", "Drifts round in loops.", C_CYAN},
     {ICON_SPITTER, "Spitter", "Sits still and fires sparks along the row.", 0xb98cff},
-    {ICON_STALKER, "Stalker", "Follows you through walls. Don't stop.", C_CYAN},
+    {ICON_SPIDER, "Drop Spider", "Twitches when you pass below, drops, then climbs back up. Wait it out.", 0xff9f43},
 };
 
 static struct help_row const help_hazards[] = {
     {ICON_SPIKES, "Brambles", "Costs a heart.", C_PINK},
-    {ICON_POOL, "Deep Water", "Costs a heart and puts you back on firm ground.", C_CYAN},
+    {ICON_POOL, "Deep Water", "Costs a heart and throws you out. Land somewhere dry: go in again and it costs another.", C_CYAN},
     {ICON_SPARK, "Spark", "Fired by Spitters. Costs a heart.", C_PINK},
     {ICON_CRUMBLE, "Crumbling Ledge", "Shakes, then gives way. It grows back after a few seconds.", C_AMBER},
     {ICON_CONVEYOR, "Conveyor", "Carries you the way the arrows point.", C_CYAN},
@@ -56,22 +56,30 @@ static struct help_row const help_hazards[] = {
     {ICON_LIFT, "Moving Platform", "Lifts and sliders. The dotted line shows where they go.", C_YELLOW},
 };
 
+static struct help_row const help_water[] = {
+    {ICON_TIDE, "The Tide", "Bubbles and arrows mean it is about to rise. The dotted line shows how far.", C_CYAN},
+    {ICON_RAFT, "Raft", "Floats on the water. Stand still too long and it goes under, so keep hopping.", C_AMBER},
+    {ICON_PLUG, "The Plug", "Pull it and the water drains. Some things can only be reached afterwards.", C_PINK},
+    {ICON_FISH, "Leaping Fish", "Ripples first, then it leaps. Cross when it has dropped back in.", 0xff9f43},
+};
+
 static struct help_row const help_chests[] = {
-    {ICON_CHEST, "The Good Stuff", "A shield, a flask of tea, a timed power or treasure. Very rarely a life or a Continue.", C_GREEN},
+    {ICON_CHEST, "The Good Stuff", "A shield, tea, a power to carry or treasure. Very rarely a life or Continue.", C_GREEN},
     {ICON_CHEST, "Lead Boots", "You move at a crawl for 12 seconds.", 0xb45cff},
     {ICON_CHEST, "Muddled", "Left is right and right is left for 10 seconds.", 0xb45cff},
     {ICON_CHEST, "Air Leak", "A fifth of your tank goes, just like that.", 0xb45cff},
-    {ICON_STALKER, "Something Is Coming", "A Stalker rises and follows you until you leave the cavern.", 0xb45cff},
+    {ICON_STALKER, "Something Is Coming", "A ghost rises and follows you through walls until you leave.", 0xb45cff},
 };
 
 static struct help_row const help_shop[] = {
     {HELP_WARE(SHOP_KETTLE_BREW), "Kettle Brew", "Gives back a lost heart.", C_PINK},
     {HELP_WARE(SHOP_LANTERN_SHIELD), "Shields", "The Ward Charm and Lantern Shield soak up a hit.", C_AMBER},
     {HELP_WARE(SHOP_TEA_THERMOS), "Tea Thermos", "Drinks itself when your air runs out.", C_AMBER},
-    {HELP_WARE(SHOP_SPRING_BOOTS), "Timed Powers", "Spring Boots, Magnet and Clockwork Slow. The clock only runs while you play.", C_GREEN},
-    {HELP_WARE(SHOP_FEATHERSTEP), "Permanent Gear", "Slippers, lamp, cleats and more. Dear, but yours for the whole run.", C_GREEN},
+    {HELP_WARE(SHOP_SPRING_BOOTS), "Powers", "Square: Spring Boots. Triangle: Magnet. Circle: Slow. One use each.", C_GREEN},
+    {HELP_WARE(SHOP_FEATHERSTEP), "Permanent Gear", "Slippers, lamp, cleats and more. Buy once, yours for the whole run.", C_GREEN},
     {HELP_WARE(SHOP_EXTRA_LIFE), "Spare Lantern", "An extra life. A luxury, and dearer every time.", C_PINK},
-    {HELP_WARE(SHOP_PHOENIX_FEATHER), "Specials", "Delver's Cache, Phoenix Feather and the Continue Lantern turn up at later stalls.", 0xff6b3d},
+    {HELP_WARE(SHOP_CONTINUE), "Continue Lantern", "On sale from the second stall. Costly.", C_GREEN},
+    {ICON_GEM_CUP, "Earning Points", "Gems, plus a bonus for each cavern cleared. More if not hit.", C_YELLOW},
 };
 
 #define HELP_PAGE(rows) rows, (int)(sizeof(rows) / sizeof(rows[0]))
@@ -81,6 +89,7 @@ static struct { char const *tab, *title; struct help_row const *rows; int n; } c
     [HELP_ITEMS] = {"Items", "Things to Collect", HELP_PAGE(help_items)},
     [HELP_FOES] = {"Guardians", "The Guardians", HELP_PAGE(help_foes)},
     [HELP_HAZARDS] = {"Hazards", "Hazards and Handy Things", HELP_PAGE(help_hazards)},
+    [HELP_WATER] = {"Water", "The Flooded Hollow", HELP_PAGE(help_water)},
     [HELP_CHESTS] = {"Chests", "Chests: Think Twice", HELP_PAGE(help_chests)},
     [HELP_SHOP] = {"Shop", "Old Barnaby's Shop (every 5th cavern)", HELP_PAGE(help_shop)},
 };
@@ -118,7 +127,7 @@ draw_help(struct app *a, struct vkr *r)
     ui_spectrum_rule(r, 660, 118, 600, 5, 0.9f);
 
     /* page tabs */
-    float const tw = 250, gap = 14, tx = 960 - (HELP_PAGES * tw + (HELP_PAGES - 1) * gap) / 2;
+    float const tw = 236, gap = 12, tx = 960 - (HELP_PAGES * tw + (HELP_PAGES - 1) * gap) / 2;
     for (int i = 0; i < HELP_PAGES; i++) {
         float x = tx + i * (tw + gap);
         vkr_rrect(r, x, 144, tw, 52, 12, i == page ? HEX(C_AMBER) : HEXA(C_PANEL, 0.92));
@@ -143,10 +152,13 @@ draw_help(struct app *a, struct vkr *r)
     }
 
     if (page == HELP_BASICS) {
-        float x = 360, y = 940;
+        float x = 190, y = 940;
         x += ui_hint(r, G_DPAD_LR, x, y, "Move", 40) + 60;
         x += ui_hint(r, G_CROSS, x, y, "Jump (hold = higher)", 40) + 60;
         x += ui_hint(r, G_DPAD_UD, x, y, "Climb", 40) + 60;
+        x += ui_hint(r, G_SQUARE, x, y, "", 40);
+        x += ui_hint(r, G_TRIANGLE, x, y, "", 40);
+        x += ui_hint(r, G_CIRCLE, x, y, "Powers", 40) + 60;
         x += ui_hint(r, G_OPTIONS, x, y, "Pause", 40) + 60;
         ui_hint(r, G_R3, x, y, "Mute", 40);
     }

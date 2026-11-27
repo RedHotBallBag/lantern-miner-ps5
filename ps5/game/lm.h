@@ -18,8 +18,9 @@
 #define GRID_ROWS 18
 #define CANVAS_W (GRID_COLS * TILE_SIZE) /* 960 */
 #define CANVAS_H (GRID_ROWS * TILE_SIZE) /* 540 */
-#define LM_VERSION "0.9.2"   /* shown on the loading splash and the title screen */
-#define LM_BUILD 16
+#define LM_VERSION "0.10.0"  /* shown on the loading splash and the title screen */
+#define LM_BUILD 19
+#define LM_TEST_MENU 0       /* Cavern Select on the title menu, for testing. Set to 0 before a release */
 #define START_LIVES 5
 #define MAX_CONTINUES 3
 #define WORLD_SIZE 10 /* caverns to a world */
@@ -42,6 +43,7 @@
 #define JUMP_BUFFER_TIME 0.125
 #define CONVEYOR_PUSH_SPEED 78.0
 #define INVULN_DURATION 1.65
+#define PIT_BOUNCE_VELOCITY (-540.0) /* throws the miner about 4 rows up, to find somewhere dry */
 #define CRUMBLE_SHAKE_TIME 0.72
 #define CRUMBLE_RESPAWN_TIME 4.2
 #define MAX_AIR 100.0
@@ -57,10 +59,23 @@
 #define LEAD_SPEED 0.6
 #define MUDDLE_TIME 10.0
 #define LEAK_AIR 22.0
+#define POWER_WARNING 3.0 /* a running power flashes and ticks for this long before it ends */
+/* water: a surface at row r sits just under a ledge in that row, so rows r and up stay dry */
+#define WATER_LIP 9       /* how far below the top of its row the surface lies */
+#define TIDE_SPEED 90.0   /* pixels a second, rising and falling */
+#define TIDE_FIRST 5.0    /* seconds from the cavern appearing to the first rise */
+#define TIDE_WARNING 2.0  /* seconds of bubbles before it rises */
+#define DRAIN_SPEED 75.0
+#define RAFT_FREEBOARD 10 /* a raft floats this far above the water */
+#define RAFT_DEPTH 14     /* and goes under after sinking this far */
+#define RAFT_GRACE 0.5    /* seconds a raft holds before it starts to go */
+#define RAFT_SINK_TIME 1.3
+#define FISH_GRAVITY 700.0
+#define FISH_WARNING 0.6
 
 enum lm_tile { T_EMPTY, T_SOLID, T_ONE_WAY, T_CONVEYOR_LEFT, T_CONVEYOR_RIGHT, T_CRUMBLE, T_BRAMBLE, T_PIT };
 
-enum lm_biome_id { BIOME_TIMBER_HEARTH, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_GLOW_MOSS, BIOME_FROST_LANTERN, BIOME_COUNT };
+enum lm_biome_id { BIOME_TIMBER_HEARTH, BIOME_AMETHYST_GROTTO, BIOME_CLOCKWORK_CELLAR, BIOME_GLOW_MOSS, BIOME_FROST_LANTERN, BIOME_FLOODED, BIOME_COUNT };
 
 enum lm_powerup { PU_SPRING_BOOTS, PU_LANTERN_SHIELD, PU_TEA_THERMOS, PU_STARLIGHT_MAGNET, PU_CLOCKWORK_SLOW, PU_COUNT };
 
@@ -73,16 +88,14 @@ enum lm_perk {
 enum lm_shop_item {
     SHOP_KETTLE_BREW, SHOP_LANTERN_WARD, SHOP_CRUMBLE_LIGHTFOOT, SHOP_CONVEYOR_CLEATS, SHOP_BRASS_LANTERN,
     SHOP_GEM_RESONANCE, SHOP_FEATHERSTEP, SHOP_EXTRA_HEARTH, SHOP_CHRONOMETER,
-    /* Lantern Powers: bought with Relic Points, kept for the rest of the run. Order matches enum lm_powerup. */
+    /* Lantern Powers. Order matches enum lm_powerup. */
     SHOP_SPRING_BOOTS, SHOP_LANTERN_SHIELD, SHOP_TEA_THERMOS, SHOP_STARLIGHT_MAGNET, SHOP_CLOCKWORK_SLOW,
-    SHOP_EXTRA_LIFE,
-    /* Special Wares: unlock at later shops */
-    SHOP_DELVERS_CACHE, SHOP_PHOENIX_FEATHER, SHOP_CONTINUE,
+    SHOP_EXTRA_LIFE, SHOP_CONTINUE,
     SHOP_COUNT
 };
 enum lm_shop_tier { TIER_SUPPLY, TIER_GEAR, TIER_MASTERWORK, TIER_POWER, TIER_SPECIAL };
 
-enum lm_enemy_kind { EN_BEETLE, EN_BOUNCER, EN_GLOW_BAT, EN_PISTON, EN_WISP, EN_CHARGER, EN_SPITTER, EN_STALKER };
+enum lm_enemy_kind { EN_BEETLE, EN_BOUNCER, EN_GLOW_BAT, EN_PISTON, EN_WISP, EN_CHARGER, EN_SPITTER, EN_STALKER, EN_SPIDER, EN_FISH };
 
 enum lm_music { MUSIC_NONE, MUSIC_TITLE, MUSIC_CAVERN, MUSIC_CAMPFIRE };
 
@@ -112,7 +125,7 @@ extern struct lm_shop_def const lm_shop[SHOP_COUNT];
 
 /* ----------------------------------------------------------------- cavern */
 
-enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST, COL_AIR };
+enum lm_collect_kind { COL_KEY, COL_RELIC, COL_CHEST, COL_AIR, COL_PLUG }; /* a plug keeps the row it drains to in `powerup` */
 /* what a chest holds: one of enum lm_powerup, or one of these */
 enum { CHEST_JACKPOT = PU_COUNT, CHEST_LIFE, CHEST_CONTINUE,
        CHEST_LEAD, CHEST_MUDDLE, CHEST_LEAK, CHEST_GHOUL, /* the nasty ones */
@@ -139,7 +152,7 @@ struct lm_lantern { double x, y, sway_phase, chain_length; };
 #define LM_MAX_COLLECT 32
 #define LM_MAX_ENEMIES 32
 #define LM_MAX_LANTERNS 5
-#define LM_MAX_MOVERS 6
+#define LM_MAX_MOVERS 10
 
 /* A one-way platform that slides between (min_x, min_y) and (max_x, max_y); x / y is its top-left corner. */
 struct lm_mover {
@@ -147,7 +160,14 @@ struct lm_mover {
     int direction;
     bool vertical;
     double dx, dy; /* movement during the last step, used to carry the miner */
+    bool raft;     /* floats on the water, and sinks under a miner who lingers */
+    double home_y, sink, linger; /* resting height when there is no water to lift it; how far under, 0 to 1 */
 };
+
+/* The cavern's water: it waits low, warns, rises, holds and falls. low_y == high_y is still water. */
+struct lm_tide { bool on; double low_y, high_y, low_secs, high_secs; };
+enum lm_tide_phase { TIDE_LOW, TIDE_WARN, TIDE_RISING, TIDE_HIGH, TIDE_FALLING };
+double lm_tide_at(struct lm_tide const *t, double clock, int *phase); /* surface height at that moment */
 
 struct lm_cavern {
     int depth;
@@ -168,6 +188,7 @@ struct lm_cavern {
     uint8_t ladders[GRID_ROWS][GRID_COLS]; /* 1 = ladder; laid over the tiles so it can pass through a ledge */
     struct lm_mover movers[LM_MAX_MOVERS]; /* starting positions; the live copy moves in struct lm_game */
     int n_movers;
+    struct lm_tide tide;
 };
 
 void lm_generate_cavern(char const *seed, int depth, struct lm_cavern *out);
@@ -182,6 +203,8 @@ struct lm_player {
     bool grounded;
     double coyote, jump_buffer;
     bool can_air_jump, has_used_double_jump;
+    bool bouncing; /* splashed a moment ago: going in again costs again */
+    bool thrown; /* still rising from a splash, so letting go of jump does not cut it short */
     double invuln, squash_x, squash_y, walk_phase;
     int on_conveyor;
     bool climbing;
@@ -189,7 +212,7 @@ struct lm_player {
     double fall_top; /* highest point since the miner last had hold of something */
     double lead, muddle; /* seconds left of a cursed chest: slowed down, left and right swapped */
     bool has_shield;
-    double spring, magnet, slow;
+    double spring, magnet, slow; /* seconds left of a running power */
     struct { double x, y; } scarf[4];
 };
 
@@ -235,8 +258,9 @@ struct lm_game {
     double air;
     int total_relics_run, total_keys_run, relics_this_cavern;
     int perks[PERK_COUNT];
-    int powers[PU_COUNT]; /* Lantern Powers owned this run (Tea Thermos = number of flasks packed) */
-    double power_time[PU_COUNT]; /* seconds left on the timed powers (Spring, Magnet, Slow); powers[] = stacks (the x2 / x3) */
+    int powers[PU_COUNT]; /* Spring, Magnet, Slow: 1 = carried, waiting for its button. Tea: flasks. Shield: caverns left */
+    double power_time[PU_COUNT]; /* seconds left on a running Spring, Magnet or Slow; they end with the cavern */
+    int hurt_depth;              /* last cavern the miner was hit or lost a life in: no clean bonus there */
     bool next_shield;
     int lives;           /* lives left, this one included */
     int continues, continues_bought;
@@ -246,7 +270,6 @@ struct lm_game {
     bool flawless_award; /* set when that continue has just been handed out */
     bool down;           /* out of lives, waiting for the player to use a continue or give up */
     int run_start_high, run_start_depth; /* records when the run began, for the "new best" banners */
-    bool phoenix;        /* Phoenix Feather packed: one free rising when the last life goes */
     double respawn_timer; /* >0 while the miner is down and about to restart the cavern */
     /* cavern */
     struct lm_cavern cavern;
@@ -258,7 +281,10 @@ struct lm_game {
     struct lm_crumble crumble[GRID_ROWS][GRID_COLS];
     struct lm_mover movers[LM_MAX_MOVERS];
     int n_movers;
-    double safe_x, safe_y; /* last firm footing: a fall into a pit puts the miner back here */
+    double tide_clock, water_y;  /* time into the tide, and where the surface is now (off the bottom if dry) */
+    double drain_y, drain_to;    /* pulled plugs hold the water at or below this */
+    int tide_phase;
+    bool practice;               /* started from Cavern Select: nothing is saved or scored */
     int chest_taken;       /* depth whose chest has been opened, so a retry does not refill it */
     int paid_depth;        /* the cavern `paid` belongs to */
     uint32_t paid;         /* one bit per collectable already scored there, so a retry cannot score it twice */
@@ -277,7 +303,7 @@ struct lm_game {
     bool paused, running;
     /* events for the app */
     unsigned events;
-    struct { int depth_cleared, relics_in_cavern, total_score, air_bonus; } adv;
+    struct { int depth_cleared, relics_in_cavern, total_score, air_bonus, relic_bonus; bool clean; } adv;
     struct lm_run_summary summary;
     /* request for haptics: strength 0..1 and duration in seconds */
     double rumble_strength, rumble_time;
@@ -289,9 +315,12 @@ struct lm_game {
 void lm_init(struct lm_game *g, uint32_t rng_seed);
 void lm_set_records(struct lm_game *g, int high_score, int best_depth);
 void lm_start_run(struct lm_game *g, char const *seed);
+void lm_start_practice(struct lm_game *g, int depth, bool stocked); /* straight to any cavern, for testing */
+void lm_reset_water(struct lm_game *g); /* tide, drain and rafts back to how a cavern starts */
 void lm_set_paused(struct lm_game *g, bool paused);
 void lm_set_input(struct lm_game *g, bool left, bool right, bool up, bool down, bool jump);
 void lm_step(struct lm_game *g, double dt);
+bool lm_use_power(struct lm_game *g, int power); /* starts a carried Spring, Magnet or Slow */
 void lm_leave_shop(struct lm_game *g);
 int lm_world_of(int depth);        /* 1, 2, 3 ... */
 void lm_use_continue(struct lm_game *g);
@@ -332,6 +361,8 @@ void lm_audio_hurt(bool shield_broken);
 void lm_audio_perk_select(void);
 void lm_audio_shop_buy(void);
 void lm_audio_spark(void);
+void lm_audio_splash(void);
+void lm_audio_tide(void);
 void lm_audio_game_over(void);
 void lm_audio_ui_move(void);
 void lm_audio_ui_select(void);
@@ -349,7 +380,8 @@ void lm_draw_world(struct vkr *r, struct lm_game const *g, struct lm_world_opts 
 enum lm_icon {
     ICON_MINER, ICON_KEY, ICON_GEM_CUP, ICON_GEM, ICON_AIR, ICON_CHEST, ICON_PORTAL_SHUT, ICON_PORTAL_OPEN, ICON_BEETLE,
     ICON_CHARGER, ICON_BOUNCER, ICON_BAT, ICON_PISTON, ICON_WISP, ICON_SPITTER, ICON_STALKER, ICON_SPARK, ICON_SPIKES,
-    ICON_POOL, ICON_CRUMBLE, ICON_CONVEYOR, ICON_LADDER, ICON_LIFT, ICON_FALL
+    ICON_POOL, ICON_CRUMBLE, ICON_CONVEYOR, ICON_LADDER, ICON_LIFT, ICON_FALL, ICON_SPIDER,
+    ICON_TIDE, ICON_RAFT, ICON_PLUG, ICON_FISH
 };
 void lm_draw_icon(struct vkr *r, int icon, float x, float y, float scale, double time);
 

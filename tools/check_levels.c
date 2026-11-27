@@ -11,10 +11,10 @@
 #include <string.h>
 #include "lm.h"
 
-#define MAX_NODES 120000
+#define MAX_NODES 200000
 #define HZ 120
 
-struct snap { struct lm_player p; struct lm_mover m[LM_MAX_MOVERS]; double sx, sy, t; };
+struct snap { struct lm_player p; struct lm_mover m[LM_MAX_MOVERS]; double t, tide, water, drain_y, drain_to; };
 struct node { struct snap s; float score; };
 
 static struct lm_game g;
@@ -55,9 +55,11 @@ grab(struct snap *s)
 {
     s->p = g.player;
     memcpy(s->m, g.movers, sizeof(s->m));
-    s->sx = g.safe_x;
-    s->sy = g.safe_y;
     s->t = g.elapsed;
+    s->tide = g.tide_clock;
+    s->water = g.water_y;
+    s->drain_y = g.drain_y;
+    s->drain_to = g.drain_to;
 }
 
 static void
@@ -65,9 +67,11 @@ restore(struct snap const *s)
 {
     g.player = s->p;
     memcpy(g.movers, s->m, sizeof(s->m));
-    g.safe_x = s->sx;
-    g.safe_y = s->sy;
     g.elapsed = s->t;
+    g.tide_clock = s->tide;
+    g.water_y = s->water;
+    g.drain_y = s->drain_y;
+    g.drain_to = s->drain_to;
     memset(g.crumble, 0, sizeof(g.crumble));
     g.prev_jump = g.in_jump = false;
     /* nothing the search does may finish the cavern or end the run */
@@ -124,6 +128,27 @@ play(struct act const *a, int target, bool *hit)
     return true;
 }
 
+/* anything that moves on a clock of its own (a moored raft only follows the water) */
+static bool
+moving(void)
+{
+    for (int i = 0; i < g.n_movers; i++)
+        if (g.movers[i].speed > 0)
+            return true;
+    return false;
+}
+
+/* where the tide is in its cycle, in half seconds */
+static int
+tide_step(void)
+{
+    struct lm_tide const *t = &g.cavern.tide;
+    if (!t->on || t->low_y <= t->high_y)
+        return 0;
+    double period = t->low_secs + TIDE_WARNING + (t->low_y - t->high_y) / TIDE_SPEED * 2 + t->high_secs;
+    return (int)(lm_fmod(g.tide_clock, period) * 2) & 255;
+}
+
 /* Searches from `from` to the target collectable (or the portal when target < 0); on success `from` moves there. */
 static bool
 search(struct snap *from, int target)
@@ -151,8 +176,11 @@ search(struct snap *from, int target)
             struct lm_player const *p = &g.player;
             uint64_t key = (uint64_t)(p->x / 8) | (uint64_t)(p->y / 8) << 8 | (uint64_t)(p->rider + 1) << 16 |
                            (uint64_t)p->climbing << 20 | (uint64_t)p->grounded << 21 |
-                           (uint64_t)(g.n_movers ? ((long)(g.elapsed / 0.5)) % 64 : 0) << 22 |
-                           (uint64_t)(p->vx > 60 ? 1 : p->vx < -60 ? 2 : 0) << 28; /* a run-up changes what a jump reaches */
+                           (uint64_t)(moving() ? ((long)(g.elapsed / 0.5)) % 64 : 0) << 22 |
+                           (uint64_t)(p->vx > 60 ? 1 : p->vx < -60 ? 2 : 0) << 28 | /* a run-up changes what a jump reaches */
+                           (uint64_t)tide_step() << 30 |
+                           (uint64_t)(p->rider >= 0 ? (int)(g.movers[p->rider].sink * 2.9) : 0) << 38 |
+                           (uint64_t)(g.drain_to / TILE_SIZE) << 41;
             uint32_t h = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 40) & (SEEN_BITS - 1);
             if (seen[h / 8] & (1 << (h % 8)))
                 continue;
@@ -167,75 +195,90 @@ search(struct snap *from, int target)
     return false;
 }
 
-static bool
-solve(int level, bool mirror, int depth)
+static void
+set_up(int level, bool mirror, int depth)
 {
     lm_init(&g, 1);
     lm_start_run(&g, "CHECK-100");
     g.depth = depth;
     lm_build_level(level, mirror, "CHECK-100", depth, &g.cavern);
-    g.cavern.n_enemies = g.n_enemies = 0;
     g.n_movers = g.cavern.n_movers;
     memcpy(g.movers, g.cavern.movers, sizeof(g.movers));
+    lm_reset_water(&g);
     g.player.x = g.cavern.spawn.x - 10;
     g.player.y = g.cavern.spawn.y;
-    g.safe_x = g.player.x;
-    g.safe_y = g.player.y;
+    g.player.fall_top = g.player.y;
+    g.player.rider = -1;
+}
+
+/* Fetches everything wanted: plugs first, in map order, then whatever is nearest and can be got to. An item that is
+   under water for now is simply left until later. */
+static bool
+gather(struct snap *at, bool everything, char const *name, bool mirror, int depth)
+{
+    bool done[LM_MAX_COLLECT] = {0}, ok = true;
+    for (int i = 0; i < g.cavern.n_collect; i++)
+        if (g.cavern.collect[i].kind == COL_PLUG) {
+            done[i] = true;
+            if (!search(at, i)) {
+                printf("  %s%s depth %d: cannot reach the plug at column %d row %d\n", name, mirror ? " (mirrored)" : "", depth,
+                       (int)(g.cavern.collect[i].x / TILE_SIZE), (int)(g.cavern.collect[i].y / TILE_SIZE));
+                return false;
+            }
+        }
+    for (;;) {
+        bool tried[LM_MAX_COLLECT] = {0}, got = false;
+        for (;;) {
+            int best = -1;
+            double bd = 1e18;
+            for (int i = 0; i < g.cavern.n_collect; i++) {
+                int kind = g.cavern.collect[i].kind;
+                double d = lm_hypot(g.cavern.collect[i].x - at->p.x, g.cavern.collect[i].y - at->p.y);
+                if (!done[i] && !tried[i] && (everything || kind == COL_KEY || kind == COL_AIR) && d < bd) { bd = d; best = i; }
+            }
+            if (best < 0)
+                break;
+            tried[best] = true;
+            if (search(at, best)) {
+                done[best] = got = true;
+                break;
+            }
+        }
+        if (got)
+            continue;
+        for (int i = 0; i < g.cavern.n_collect; i++)
+            if (tried[i]) {
+                int kind = g.cavern.collect[i].kind;
+                printf("  %s%s depth %d: cannot reach %s at column %d row %d\n", name, mirror ? " (mirrored)" : "", depth,
+                       kind == COL_KEY ? "key" : kind == COL_CHEST ? "chest" : kind == COL_AIR ? "air bottle" : "gem",
+                       (int)(g.cavern.collect[i].x / TILE_SIZE), (int)(g.cavern.collect[i].y / TILE_SIZE));
+                ok = false;
+            }
+        return ok;
+    }
+}
+
+static bool
+solve(int level, bool mirror, int depth)
+{
+    set_up(level, mirror, depth);
+    g.cavern.n_enemies = g.n_enemies = 0;
 
     struct snap at;
     grab(&at);
-    bool done[LM_MAX_COLLECT] = {0}, ok = true;
-    /* chests too: any chest that can appear must be reachable. Nearest first. */
-    for (;;) {
-        int best = -1;
-        double bd = 1e18;
-        for (int i = 0; i < g.cavern.n_collect; i++) {
-            double d = lm_hypot(g.cavern.collect[i].x - at.p.x, g.cavern.collect[i].y - at.p.y);
-            if (!done[i] && d < bd) { bd = d; best = i; }
-        }
-        if (best < 0)
-            break;
-        done[best] = true;
-        if (!search(&at, best)) {
-            printf("  %s%s depth %d: cannot reach %s at column %d row %d\n", g.cavern.name, mirror ? " (mirrored)" : "", depth,
-                   g.cavern.collect[best].kind == COL_KEY ? "key" : g.cavern.collect[best].kind == COL_CHEST ? "chest" : g.cavern.collect[best].kind == COL_AIR ? "air bottle" : "gem",
-                   (int)(g.cavern.collect[best].x / TILE_SIZE), (int)(g.cavern.collect[best].y / TILE_SIZE));
-            ok = false;
-        }
-    }
+    /* chests too: any chest that can appear must be reachable */
+    bool ok = gather(&at, true, g.cavern.name, mirror, depth);
     if (!search(&at, -1)) {
         printf("  %s%s depth %d: cannot reach the portal\n", g.cavern.name, mirror ? " (mirrored)" : "", depth);
         ok = false;
     }
     if (depth != 50) {
         /* again from the start, taking only the keys and the air bottle */
-        lm_init(&g, 1);
-        lm_start_run(&g, "CHECK-100");
-        g.depth = depth;
-        lm_build_level(level, mirror, "CHECK-100", depth, &g.cavern);
+        set_up(level, mirror, depth);
         g.cavern.n_enemies = g.n_enemies = 0;
-        g.n_movers = g.cavern.n_movers;
-        memcpy(g.movers, g.cavern.movers, sizeof(g.movers));
-        g.player.x = g.cavern.spawn.x - 10;
-        g.player.y = g.cavern.spawn.y;
-        g.safe_x = g.player.x;
-        g.safe_y = g.player.y;
         grab(&at);
-        memset(done, 0, sizeof(done));
-        for (;;) {
-            int best = -1;
-            double bd = 1e18;
-            for (int i = 0; i < g.cavern.n_collect; i++) {
-                int kind = g.cavern.collect[i].kind;
-                double d = lm_hypot(g.cavern.collect[i].x - at.p.x, g.cavern.collect[i].y - at.p.y);
-                if (!done[i] && (kind == COL_KEY || kind == COL_AIR) && d < bd) { bd = d; best = i; }
-            }
-            if (best < 0)
-                break;
-            done[best] = true;
-            if (!search(&at, best))
-                ok = false;
-        }
+        if (!gather(&at, false, g.cavern.name, mirror, depth))
+            ok = false;
         if (!search(&at, -1))
             ok = false;
         double most = g.cavern.air_secs * (1 + AIR_BOTTLE / MAX_AIR);
@@ -247,10 +290,7 @@ solve(int level, bool mirror, int depth)
         }
     }
     /* foes back in: standing at the start for a few seconds must be safe, even with every foe present */
-    lm_init(&g, 1);
-    lm_start_run(&g, "CHECK-100");
-    g.depth = depth;
-    lm_build_level(level, mirror, "CHECK-100", depth, &g.cavern);
+    set_up(level, mirror, depth);
     g.n_enemies = g.cavern.n_enemies;
     for (int i = 0; i < g.n_enemies; i++) {
         memset(&g.enemies[i], 0, sizeof(g.enemies[i]));
@@ -261,11 +301,9 @@ solve(int level, bool mirror, int depth)
         g.enemies[i].anchor_x = g.enemies[i].s.x;
         g.enemies[i].anchor_y = g.enemies[i].s.y;
         g.enemies[i].timer = 1.5;
+        if (g.enemies[i].s.kind == EN_FISH)
+            g.enemies[i].s.y = CANVAS_H + 100;
     }
-    g.n_movers = g.cavern.n_movers;
-    memcpy(g.movers, g.cavern.movers, sizeof(g.movers));
-    g.player.x = g.cavern.spawn.x - 10;
-    g.player.y = g.cavern.spawn.y;
     g.player.invuln = 0.9;
     for (int i = 0; i < 4 * HZ; i++) {
         g.banner.active = false;

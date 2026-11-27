@@ -61,7 +61,7 @@ rng_chance(struct rng *r, double p)
 
 /* ------------------------------------------------------------------- maps */
 
-enum { OP_FILL, OP_LADDER, OP_MOVER, OP_START, OP_EXIT, OP_KEY, OP_GEM, OP_CHEST, OP_FOE };
+enum { OP_FILL, OP_LADDER, OP_MOVER, OP_START, OP_EXIT, OP_KEY, OP_GEM, OP_CHEST, OP_FOE, OP_RAFT, OP_TIDE, OP_PLUG };
 struct op { uint8_t kind, arg, c0, r0, c1, r1; };
 struct level { char const *name, *hint; int biome, air; struct op const *ops; int n; };
 
@@ -103,7 +103,7 @@ add_foe(struct lm_cavern *cv, int kind, int c, int r, struct rng *rng)
     if (kind == EN_BOUNCER && depth < 3) kind = EN_BEETLE;
     if (kind == EN_WISP && depth < 4) kind = EN_GLOW_BAT;
     if (kind == EN_PISTON && depth < 3) kind = EN_GLOW_BAT;
-    if (kind == EN_STALKER && depth < 12) kind = EN_WISP;
+    if (kind == EN_SPIDER && depth < 5) kind = EN_GLOW_BAT;
 
     struct lm_enemy_spawn e = {0};
     e.kind = kind;
@@ -150,12 +150,15 @@ add_foe(struct lm_cavern *cv, int kind, int c, int r, struct rng *rng)
         e.min_y = e.y - 38;
         e.max_y = e.y + 38;
         e.speed = 1.35 * scale;
-    } else { /* stalker */
-        e.min_x = TILE_SIZE;
-        e.max_x = (GRID_COLS - 2) * TILE_SIZE;
-        e.min_y = TILE_SIZE;
-        e.max_y = (GRID_ROWS - 2) * TILE_SIZE;
-        e.speed = lm_min(74, 38 + (depth - 12) * 2.5);
+    } else if (kind == EN_FISH) { /* lurks under the water and leaps up to the row it was given */
+        e.speed = 1;
+    } else { /* spider: its thread reaches up to whatever is overhead, and down as far as is clear */
+        int top = r, low = r;
+        while (open_for_foe(cv, c, top - 1)) top--;
+        while (low < r + 10 && open_for_foe(cv, c, low + 1)) low++;
+        e.min_y = top * TILE_SIZE;
+        e.max_y = low * TILE_SIZE + 8;
+        e.speed = 230 * lm_min(1.3, scale);
     }
     cv->enemies[cv->n_enemies++] = e;
 }
@@ -265,6 +268,34 @@ lm_build_level(int index, bool mirror, char const *seed, int depth, struct lm_ca
             m->y = m->vertical ? (m->direction > 0 ? m->min_y : m->max_y) : m->min_y;
             break;
         }
+        case OP_RAFT: {
+            if (cv->n_movers >= LM_MAX_MOVERS)
+                break;
+            struct lm_mover *m = &cv->movers[cv->n_movers++];
+            int w = o->arg;
+            int a = mirror ? GRID_COLS - o->c0 - w : o->c0, b = mirror ? GRID_COLS - o->c1 - w : o->c1;
+            m->raft = true;
+            m->width = w * TILE_SIZE;
+            m->min_x = (a < b ? a : b) * TILE_SIZE;
+            m->max_x = (a < b ? b : a) * TILE_SIZE;
+            m->home_y = o->r0 * TILE_SIZE - 5;
+            m->min_y = m->max_y = m->home_y;
+            m->speed = a == b ? 0 : 46;
+            m->direction = mirror ? -1 : 1;
+            m->x = a * TILE_SIZE;
+            m->y = m->home_y;
+            break;
+        }
+        case OP_TIDE:
+            cv->tide.on = true;
+            cv->tide.low_y = o->c0 * TILE_SIZE + WATER_LIP;
+            cv->tide.high_y = o->r0 * TILE_SIZE + WATER_LIP;
+            cv->tide.low_secs = o->arg;
+            cv->tide.high_secs = o->c1;
+            break;
+        case OP_PLUG:
+            add_collect(cv, COL_PLUG, o->arg, 0, x, y + TILE_SIZE * 0.55, 0);
+            break;
         case OP_START:
             cv->spawn.x = x;
             cv->spawn.y = y + TILE_SIZE - 26;

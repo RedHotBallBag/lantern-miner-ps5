@@ -531,6 +531,23 @@ lm_audio_hurt(bool shield_broken)
 }
 
 void
+lm_audio_splash(void)
+{
+    SFX_GUARD();
+    add_voice(BUS_SFX, W_SAW, 620, 90, 0.16, 0, 0.004, 0.16, 0.18, 0.2, 0, true);
+    add_voice(BUS_SFX, W_SINE, 280, 720, 0.1, 0.07, 0.008, 0.18, 0.12, 0.14, 0, false);
+}
+
+/* a gurgle: five bubbles on the way up */
+void
+lm_audio_tide(void)
+{
+    SFX_GUARD();
+    for (int i = 0; i < 5; i++)
+        add_voice(BUS_SFX, W_SINE, 120 + i * 34, 260 + i * 50, 0.12, i * 0.13, 0.01, 0.2, 0.13, 0.15, 0, false);
+}
+
+void
 lm_audio_perk_select(void)
 {
     static int const n[4] = {62, 69, 74, 78};

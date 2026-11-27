@@ -121,6 +121,51 @@ emit_game_over(struct lm_game *g, bool air);
 static void set_banner(struct lm_game *g, char const *title, char const *sub, double secs);
 static void lose_life(struct lm_game *g, bool air);
 
+/* --------------------------------------------------------------------- water */
+
+#define NO_WATER (CANVAS_H + 100.0)
+
+double
+lm_tide_at(struct lm_tide const *t, double clock, int *phase)
+{
+    int at = TIDE_LOW;
+    double y = t->on ? t->low_y : NO_WATER;
+    double swing = t->low_y - t->high_y;
+    if (t->on && swing > 0) {
+        double move = swing / TIDE_SPEED;
+        double k = lm_fmod(clock, t->low_secs + TIDE_WARNING + move * 2 + t->high_secs);
+        if (k < t->low_secs) {
+            at = TIDE_LOW;
+        } else if ((k -= t->low_secs) < TIDE_WARNING) {
+            at = TIDE_WARN;
+        } else if ((k -= TIDE_WARNING) < move) {
+            at = TIDE_RISING;
+            y = t->low_y - k * TIDE_SPEED;
+        } else if ((k -= move) < t->high_secs) {
+            at = TIDE_HIGH;
+            y = t->high_y;
+        } else {
+            at = TIDE_FALLING;
+            y = t->high_y + (k - t->high_secs) * TIDE_SPEED;
+        }
+    }
+    if (phase)
+        *phase = at;
+    return y;
+}
+
+void
+lm_reset_water(struct lm_game *g)
+{
+    struct lm_tide const *t = &g->cavern.tide;
+    g->tide_clock = t->on ? lm_max(0, t->low_secs + TIDE_WARNING - TIDE_FIRST) : 0;
+    g->drain_y = g->drain_to = 0;
+    g->water_y = lm_tide_at(t, g->tide_clock, &g->tide_phase);
+    for (int i = 0; i < g->n_movers; i++)
+        if (g->movers[i].raft) /* afloat from the start */
+            g->movers[i].y = lm_min(g->movers[i].home_y, g->water_y - RAFT_FREEBOARD);
+}
+
 /* ---------------------------------------------------------------------- load */
 
 static void
@@ -150,7 +195,11 @@ create_player(struct lm_game *g)
 static void
 load_cavern(struct lm_game *g, int depth)
 {
-    lm_generate_cavern(g->seed, depth, &g->cavern);
+    /* the chest is rolled afresh every time, so it is never the same old one */
+    char luck[64];
+    snprintf(luck, sizeof(luck), "%s::%d", g->seed, (int)(lm_rand(g) * 1000000));
+    lm_generate_cavern(luck, depth, &g->cavern);
+    memset(g->power_time, 0, sizeof(g->power_time));
     if (g->chest_taken == depth)
         for (int i = 0; i < g->cavern.n_collect; i++)
             if (g->cavern.collect[i].kind == COL_CHEST)
@@ -164,8 +213,6 @@ load_cavern(struct lm_game *g, int depth)
         if (g->cavern.collect[i].kind == COL_RELIC && (g->paid >> i & 1))
             g->cavern.collect[i].collected = true;
     create_player(g);
-    g->safe_x = g->player.x;
-    g->safe_y = g->player.y;
     if (g->powers[PU_LANTERN_SHIELD] > 0) {
         g->player.has_shield = true; /* the Lantern Shield renews for a few caverns, then runs out */
         g->powers[PU_LANTERN_SHIELD] -= 1;
@@ -187,11 +234,16 @@ load_cavern(struct lm_game *g, int depth)
         e->timer = sp->kind == EN_SPITTER ? 1.2 + lm_fmod(sp->phase, 1.4) : 0;
         e->anchor_x = sp->x;
         e->anchor_y = sp->y;
+        if (sp->kind == EN_FISH) {
+            e->s.y = NO_WATER; /* out of sight until it leaps */
+            e->timer = 1.4 + lm_fmod(sp->phase, 2.0);
+        }
     }
     g->n_proj = 0;
     memset(g->crumble, 0, sizeof(g->crumble));
     g->n_movers = g->cavern.n_movers;
     memcpy(g->movers, g->cavern.movers, sizeof(g->movers));
+    lm_reset_water(g);
     g->n_particles = 0;
     g->n_floats = 0;
     g->keys_collected = 0;
@@ -253,8 +305,8 @@ lm_start_run(struct lm_game *g, char const *seed)
     g->max_hearts = BASE_HEARTS;
     g->hearts = BASE_HEARTS;
     g->lives = START_LIVES;
-    g->phoenix = false;
     g->continues = g->continues_bought = 0;
+    g->hurt_depth = 0;
     g->lives_bought = 0;
     g->world_score = 0;
     g->flawless = true;
@@ -277,10 +329,30 @@ lm_start_run(struct lm_game *g, char const *seed)
     g->banner.active = false;
     g->events = 0;
     clear_inputs(g);
+    g->practice = false;
     load_cavern(g, 1);
     set_banner(g, g->cavern.name, g->cavern.hint, 1.8);
     g->running = true;
     lm_audio_set_music_mode(MUSIC_CAVERN, 1.0);
+}
+
+void
+lm_start_practice(struct lm_game *g, int depth, bool stocked)
+{
+    lm_start_run(g, "TESTING");
+    depth = depth < 1 ? 1 : depth > lm_level_count() ? lm_level_count() : depth;
+    g->practice = true;
+    g->lives = MAX_LIVES;
+    g->flawless = false;
+    if (stocked) {
+        g->relic_points = 20000;
+        g->continues = MAX_CONTINUES;
+        g->powers[PU_SPRING_BOOTS] = g->powers[PU_STARLIGHT_MAGNET] = g->powers[PU_CLOCKWORK_SLOW] = 1;
+        g->powers[PU_TEA_THERMOS] = 3;
+    }
+    g->depth = depth;
+    load_cavern(g, depth);
+    set_banner(g, g->cavern.name, g->cavern.hint, 1.8);
 }
 
 void
@@ -317,31 +389,43 @@ lm_cavern_until_shop(struct lm_game const *g)
 /* --------------------------------------------------------------------- shop */
 
 static bool
-power_is_timed(int item)
+power_is_timed(int pu)
 {
-    return item == SHOP_SPRING_BOOTS || item == SHOP_STARLIGHT_MAGNET || item == SHOP_CLOCKWORK_SLOW;
+    return pu == PU_SPRING_BOOTS || pu == PU_STARLIGHT_MAGNET || pu == PU_CLOCKWORK_SLOW;
 }
 
-static double
-power_base_time(int item)
+static bool
+item_is_timed(int item)
 {
-    return item == SHOP_SPRING_BOOTS ? 25.0 : 20.0;
+    return item >= SHOP_SPRING_BOOTS && item <= SHOP_CLOCKWORK_SLOW && power_is_timed(item - SHOP_SPRING_BOOTS);
 }
 
-/* Timed powers cost more for each extra x you stack (x2 = +75%, x3 = +150% of the base price). */
+bool
+lm_use_power(struct lm_game *g, int pu)
+{
+    struct lm_player *p = &g->player;
+    if (!g->running || g->paused || g->respawn_timer > 0 || g->pending_advance > 0 || g->transition_locked)
+        return false;
+    if (!power_is_timed(pu) || g->powers[pu] <= 0 || g->power_time[pu] > 0)
+        return false;
+    g->powers[pu] = 0;
+    g->power_time[pu] = lm_powerups[pu].duration;
+    lm_audio_powerup();
+    spawn_burst(g, p->x + p->width * 0.5, p->y + p->height * 0.5, 16, lm_powerups[pu].color, 145);
+    spawn_float(g, p->x + p->width * 0.5, p->y - 52, lm_powerups[pu].name, lm_powerups[pu].color); /* clear of the time bars */
+    rumble(g, 0.3, 0.1);
+    return true;
+}
+
 int
 lm_shop_cost(struct lm_game const *g, int item)
 {
     int cost = lm_shop[item].cost;
     if (item == SHOP_CONTINUE)
         cost += cost / 2 * g->continues_bought;
-    if (item == SHOP_EXTRA_LIFE || item == SHOP_DELVERS_CACHE)
+    if (item == SHOP_EXTRA_LIFE)
         cost += LIFE_PRICE_STEP * g->lives_bought;
-    if (lm_shop[item].perk >= 0)
-        cost += cost / 2 * g->perks[lm_shop[item].perk]; /* each extra level of a perk is 50% dearer */
-    if (power_is_timed(item))
-        cost += cost * 3 * g->powers[item - SHOP_SPRING_BOOTS] / 4;
-    if (item != SHOP_EXTRA_LIFE && item != SHOP_DELVERS_CACHE && item != SHOP_PHOENIX_FEATHER && item != SHOP_CONTINUE)
+    if (item != SHOP_EXTRA_LIFE && item != SHOP_CONTINUE)
         cost = cost * (100 - lm_shop_discount(g)) / 100;
     return (cost + 5) / 10 * 10; /* tidy to the nearest 10 */
 }
@@ -361,24 +445,15 @@ lm_shop_unlock_at(int item)
 {
     /* the first stall sells the basics, and each one after brings something new */
     switch (item) {
-    case SHOP_SPRING_BOOTS: case SHOP_LANTERN_SHIELD: case SHOP_CONVEYOR_CLEATS: case SHOP_CONTINUE:
+    case SHOP_SPRING_BOOTS: case SHOP_LANTERN_SHIELD: case SHOP_CONVEYOR_CLEATS: case SHOP_GEM_RESONANCE: case SHOP_CONTINUE:
         return 2;
-    case SHOP_STARLIGHT_MAGNET: case SHOP_BRASS_LANTERN: case SHOP_FEATHERSTEP: case SHOP_DELVERS_CACHE:
+    case SHOP_STARLIGHT_MAGNET: case SHOP_BRASS_LANTERN: case SHOP_FEATHERSTEP:
         return 3;
-    case SHOP_CLOCKWORK_SLOW: case SHOP_GEM_RESONANCE: case SHOP_EXTRA_HEARTH: case SHOP_PHOENIX_FEATHER:
+    case SHOP_CLOCKWORK_SLOW: case SHOP_EXTRA_HEARTH: case SHOP_CHRONOMETER:
         return 4;
-    case SHOP_CHRONOMETER:
-        return 5;
     default:
         return 1;
     }
-}
-
-/* nothing in the Delver's Cache would do any good */
-static bool
-cache_wasted(struct lm_game const *g)
-{
-    return g->lives >= MAX_LIVES && g->hearts >= g->max_hearts && g->powers[PU_TEA_THERMOS] >= 3;
 }
 
 void
@@ -422,46 +497,34 @@ lm_shop_item_status(struct lm_game const *g, int item, struct lm_shop_status *ou
             out->is_owned = true;
             return;
         }
-    } else if (item == SHOP_DELVERS_CACHE || item == SHOP_PHOENIX_FEATHER) {
-        if (item == SHOP_DELVERS_CACHE && cache_wasted(g)) {
-            snprintf(out->owned, sizeof(out->owned), "Bundle");
-            snprintf(out->status, sizeof(out->status), "All Full");
+    } else if (item_is_timed(item)) {
+        if (g->powers[item - SHOP_SPRING_BOOTS] > 0) {
+            snprintf(out->owned, sizeof(out->owned), "Carried");
+            snprintf(out->status, sizeof(out->status), "Ready to use");
             out->is_owned = true;
             return;
         }
-        if (item == SHOP_PHOENIX_FEATHER && g->phoenix) {
-            snprintf(out->owned, sizeof(out->owned), "Packed");
-            snprintf(out->status, sizeof(out->status), "Ready");
-            out->is_owned = true;
-            return;
-        }
-        snprintf(out->owned, sizeof(out->owned), item == SHOP_PHOENIX_FEATHER ? "Once" : "Bundle");
+        snprintf(out->owned, sizeof(out->owned), "%ds", (int)lm_powerups[item - SHOP_SPRING_BOOTS].duration);
     } else {
-        int owned = it->perk >= 0 ? g->perks[it->perk] : item >= SHOP_SPRING_BOOTS && item <= SHOP_CLOCKWORK_SLOW ? g->powers[item - SHOP_SPRING_BOOTS] : 0;
+        bool power = item >= SHOP_SPRING_BOOTS && item <= SHOP_CLOCKWORK_SLOW;
+        int owned = it->perk >= 0 ? g->perks[it->perk] : power ? g->powers[item - SHOP_SPRING_BOOTS] : 0;
         if (it->max_stacks > 0 && owned >= it->max_stacks) {
-            snprintf(out->status, sizeof(out->status), power_is_timed(item) ? "Max x3" : "Active");
-            if (power_is_timed(item))
-                snprintf(out->owned, sizeof(out->owned), "x%d %ds", owned, (int)lm_ceil(g->power_time[item - SHOP_SPRING_BOOTS]));
-            else if (item == SHOP_LANTERN_SHIELD)
+            snprintf(out->status, sizeof(out->status), it->perk >= 0 ? "Owned" : "Active");
+            if (item == SHOP_LANTERN_SHIELD)
                 snprintf(out->owned, sizeof(out->owned), "%d left", owned);
             else if (it->max_stacks > 1)
                 snprintf(out->owned, sizeof(out->owned), "%d/%d", owned, it->max_stacks);
             else
-                snprintf(out->owned, sizeof(out->owned), "Max");
+                snprintf(out->owned, sizeof(out->owned), "Yours");
             out->is_owned = true;
             return;
         }
-        if (power_is_timed(item)) {
-            if (owned > 0)
-                snprintf(out->owned, sizeof(out->owned), "x%d %ds", owned, (int)lm_ceil(g->power_time[item - SHOP_SPRING_BOOTS]));
-            else
-                snprintf(out->owned, sizeof(out->owned), "%ds", (int)power_base_time(item));
-        } else if (item == SHOP_LANTERN_SHIELD && owned > 0)
-            snprintf(out->owned, sizeof(out->owned), "%d left", owned);
-        else if (it->max_stacks > 1)
+        if (it->max_stacks > 1)
             snprintf(out->owned, sizeof(out->owned), "%d/%d", owned, it->max_stacks);
+        else if (it->perk >= 0)
+            snprintf(out->owned, sizeof(out->owned), "Whole run");
         else
-            snprintf(out->owned, sizeof(out->owned), "Unique");
+            snprintf(out->owned, sizeof(out->owned), "3 Caverns");
     }
     if (g->relic_points >= cost) {
         lm_fmt_int(a, sizeof(a), cost);
@@ -502,34 +565,15 @@ lm_shop_purchase(struct lm_game *g, int item)
         g->relic_points -= cost;
         g->lives += 1;
         g->lives_bought += 1;
-    } else if (item == SHOP_DELVERS_CACHE) {
-        if (cache_wasted(g))
-            return false;
-        g->relic_points -= cost;
-        g->lives = g->lives + 2 < MAX_LIVES ? g->lives + 2 : MAX_LIVES;
-        g->lives_bought += 2;
-        g->hearts = g->max_hearts;
-        if (g->powers[PU_TEA_THERMOS] < 3)
-            g->powers[PU_TEA_THERMOS] += 1;
-    } else if (item == SHOP_PHOENIX_FEATHER) {
-        if (g->phoenix)
-            return false;
-        g->relic_points -= cost;
-        g->phoenix = true;
     } else if (item >= SHOP_SPRING_BOOTS && item <= SHOP_CLOCKWORK_SLOW) {
         int pu = item - SHOP_SPRING_BOOTS;
         if (g->powers[pu] >= it->max_stacks)
             return false;
         g->relic_points -= cost;
-        if (power_is_timed(item)) {
-            /* each purchase adds another full timer; the xN is how many timers are stacked (up to 3) */
-            g->power_time[pu] = lm_min(g->power_time[pu] + power_base_time(item), power_base_time(item) * 3);
-            g->powers[pu] = (int)lm_ceil(g->power_time[pu] / power_base_time(item));
-        } else if (pu == PU_LANTERN_SHIELD) {
+        if (pu == PU_LANTERN_SHIELD)
             g->powers[pu] = SHIELD_CAVERNS; /* shields the next few caverns */
-        } else {
+        else
             g->powers[pu] += 1;
-        }
     } else if (it->perk >= 0) {
         int owned = g->perks[it->perk];
         if (it->max_stacks > 0 && owned >= it->max_stacks)
@@ -681,6 +725,7 @@ damage_player(struct lm_game *g, double source_x, double source_y)
     (void)source_y;
 
     p->climbing = false; /* a hit knocks you off a ladder */
+    g->hurt_depth = g->depth;
 
     if (p->has_shield) {
         p->has_shield = false;
@@ -714,51 +759,41 @@ damage_player(struct lm_game *g, double source_x, double source_y)
     return false;
 }
 
-/* Remember firm, safe footing: ground that will not move, crumble or carry the miner into trouble. */
-static void
-note_safe_ground(struct lm_game *g, struct lm_player const *p)
-{
-    if (!p->grounded || p->rider >= 0 || p->climbing)
-        return;
-    int row = (int)lm_floor((p->y + p->height + 1) / TILE_SIZE);
-    int left = (int)lm_floor((p->x + 1) / TILE_SIZE), right = (int)lm_floor((p->x + p->width - 1) / TILE_SIZE);
-    for (int c = left; c <= right; c++) {
-        enum lm_tile t = get_tile(g, c, row);
-        if (t != T_SOLID && t != T_ONE_WAY)
-            return;
-    }
-    for (int c = left - 1; c <= right + 1; c++)
-        if (get_tile(g, c, row - 1) == T_BRAMBLE)
-            return;
-    g->safe_x = p->x;
-    g->safe_y = p->y;
-}
-
-/* A pit costs a heart (or the ward) and sets the miner back on the last firm ground. */
+/* Water costs a heart (or the ward) and throws the miner back up to land somewhere dry, or not. A raft keeps the
+   feet dry until it has gone right under. */
 static bool
 check_pit(struct lm_game *g, struct lm_player *p)
 {
-    int row = (int)lm_floor((p->y + p->height - 4) / TILE_SIZE);
-    double cx = p->x + p->width * 0.5;
-    if (get_tile(g, (int)lm_floor(cx / TILE_SIZE), row) != T_PIT)
+    double feet = p->y + p->height, cx = p->x + p->width * 0.5;
+    double depth = 0;
+    if (p->rider >= 0 && g->movers[p->rider].raft) {
+        if (g->movers[p->rider].sink < 1)
+            return false;
+    } else if (feet - 4 > g->water_y) {
+        depth = feet - g->water_y;
+    } else if (get_tile(g, (int)lm_floor(cx / TILE_SIZE), (int)lm_floor((feet - 4) / TILE_SIZE)) != T_PIT) {
         return false;
+    }
+    if (p->vy < 0)
+        return true; /* already on the way out */
+    double vx = p->vx;
     spawn_burst(g, cx, p->y + p->height, 18, lm_biomes[g->cavern.biome].accent_spec, 170);
-    if (p->invuln <= 0)
+    lm_audio_splash();
+    if (p->bouncing || p->invuln <= 0)
         damage_player(g, cx, p->y + p->height);
     if (g->respawn_timer > 0 || g->down || (g->events & EV_GAME_OVER))
         return true;
-    p->x = g->safe_x;
-    p->y = g->safe_y;
-    p->vx = p->vy = 0;
-    p->grounded = true;
+    p->vx = vx; /* no sideways shove: the way out is the player's to steer */
+    /* from deep down the throw is harder, so it always clears the surface */
+    p->vy = -lm_min(760, lm_max(-PIT_BOUNCE_VELOCITY, lm_sqrt(2 * GRAVITY * (depth + 120))));
+    p->bouncing = p->thrown = true;
+    p->grounded = false;
     p->climbing = false;
     p->rider = -1;
+    p->coyote = 0;
+    p->has_used_double_jump = false;
     p->fall_top = p->y;
     p->invuln = lm_max(p->invuln, INVULN_DURATION);
-    for (int i = 0; i < 4; i++) {
-        p->scarf[i].x = p->x + 10;
-        p->scarf[i].y = p->y + 11;
-    }
     return true;
 }
 
@@ -782,7 +817,7 @@ check_hazards(struct lm_game *g, struct lm_player *p)
 static double
 power_slow(struct lm_game const *g)
 {
-    return g->powers[PU_CLOCKWORK_SLOW] > 0 ? 0.75 : 1.0;
+    return g->power_time[PU_CLOCKWORK_SLOW] > 0 ? 0.75 : 1.0;
 }
 
 static void
@@ -812,6 +847,31 @@ update_movers(struct lm_game *g, double dt)
 {
     for (int i = 0; i < g->n_movers; i++) {
         struct lm_mover *m = &g->movers[i];
+        if (m->raft) {
+            double was_x = m->x, was_y = m->y;
+            if (g->player.rider == i) {
+                m->linger += dt;
+                if (m->linger > RAFT_GRACE)
+                    m->sink = lm_min(1, m->sink + dt / RAFT_SINK_TIME);
+            } else {
+                m->linger = 0;
+                m->sink = lm_max(0, m->sink - dt * 1.6);
+            }
+            if (m->speed > 0) {
+                m->x += m->direction * m->speed * dt;
+                if (m->x <= m->min_x) {
+                    m->x = m->min_x;
+                    m->direction = 1;
+                } else if (m->x >= m->max_x) {
+                    m->x = m->max_x;
+                    m->direction = -1;
+                }
+            }
+            m->y = lm_min(m->home_y, g->water_y - RAFT_FREEBOARD) + m->sink * RAFT_DEPTH;
+            m->dx = m->x - was_x;
+            m->dy = m->y - was_y;
+            continue;
+        }
         double *pos = m->vertical ? &m->y : &m->x;
         double lo = m->vertical ? m->min_y : m->min_x, hi = m->vertical ? m->max_y : m->max_x;
         double old = *pos;
@@ -927,28 +987,22 @@ update_player(struct lm_game *g, double dt)
     int feather = g->perks[PERK_FEATHERSTEP];
 
     p->invuln = lm_max(0, p->invuln - dt);
+    if (p->invuln <= 0)
+        p->bouncing = false;
     p->lead = lm_max(0, p->lead - dt);
     p->muddle = lm_max(0, p->muddle - dt);
-    p->spring = lm_max(0, p->spring - dt);
-    p->magnet = lm_max(0, p->magnet - dt);
-    p->slow = 0; /* applied through power_slow() */
-    /* bought powers run on a timer that only counts down while you are playing; when it ends the stacks reset */
-    static int const timed[3] = {PU_SPRING_BOOTS, PU_STARLIGHT_MAGNET, PU_CLOCKWORK_SLOW};
-    for (int k = 0; k < 3; k++) {
-        int pu = timed[k];
-        if (g->powers[pu] > 0) {
-            if (!g->banner.active) /* the timer waits while the cavern banner is up */
-                g->power_time[pu] -= dt;
-            if (g->power_time[pu] <= 0) {
-                g->power_time[pu] = 0;
-                g->powers[pu] = 0;
-            } else {
-                g->powers[pu] = (int)lm_ceil(g->power_time[pu] / power_base_time(SHOP_SPRING_BOOTS + pu));
-            }
-        }
+    /* a running power only counts down while you are playing, and waits for the cavern banner */
+    for (int pu = 0; pu < PU_COUNT; pu++) {
+        double left = g->power_time[pu];
+        if (left <= 0 || g->banner.active)
+            continue;
+        g->power_time[pu] = lm_max(0, left - dt);
+        if (left <= POWER_WARNING + 1 && (int)lm_ceil(g->power_time[pu]) != (int)lm_ceil(left))
+            lm_audio_ui_move(); /* tick, tick, gone */
     }
-    p->spring = g->powers[PU_SPRING_BOOTS] > 0 ? 1 : 0;
-    p->magnet = g->powers[PU_STARLIGHT_MAGNET] > 0 ? 1 : 0;
+    p->spring = g->power_time[PU_SPRING_BOOTS];
+    p->magnet = g->power_time[PU_STARLIGHT_MAGNET];
+    p->slow = g->power_time[PU_CLOCKWORK_SLOW];
 
     p->squash_x += (1 - p->squash_x) * lm_min(1, dt * 14);
     p->squash_y += (1 - p->squash_y) * lm_min(1, dt * 14);
@@ -1016,6 +1070,7 @@ update_player(struct lm_game *g, double dt)
         } else if (can_air_hop && !p->has_used_double_jump) {
             p->vy = p->spring > 0 ? DOUBLE_JUMP_VELOCITY * 1.08 : DOUBLE_JUMP_VELOCITY * 0.9;
             p->has_used_double_jump = true;
+            p->thrown = false;
             p->fall_top = p->y; /* a flutter in mid-air breaks the fall */
             p->jump_buffer = 0;
             p->squash_x = 0.76;
@@ -1025,7 +1080,9 @@ update_player(struct lm_game *g, double dt)
         }
     }
 
-    if (g->prev_jump && !g->in_jump && p->vy < -150)
+    if (p->vy >= 0)
+        p->thrown = false;
+    if (g->prev_jump && !g->in_jump && p->vy < -150 && !p->thrown)
         p->vy *= JUMP_CUT_MULTIPLIER;
     g->prev_jump = g->in_jump;
 
@@ -1070,7 +1127,6 @@ update_player(struct lm_game *g, double dt)
         p->walk_phase += dt * (lm_fabs(p->vx) / MOVE_SPEED);
 
     update_scarf(g, p, dt);
-    note_safe_ground(g, p);
     check_hazards(g, p);
 }
 
@@ -1212,6 +1268,66 @@ update_enemies(struct lm_game *g, double dt)
             }
             break;
         }
+        case EN_FISH: /* ripples, leaps in an arc to the height the map set, and drops back */
+            if (e->is_charging) {
+                e->vy += FISH_GRAVITY * step_dt;
+                s->y += e->vy * step_dt;
+                if (s->y >= e->vx && e->vy > 0) { /* vx holds the surface it left from */
+                    e->is_charging = false;
+                    spawn_burst(g, s->x + e->width * 0.5, e->vx, 8, lm_biomes[g->cavern.biome].accent_spec, 90);
+                    s->y = NO_WATER;
+                    e->timer = 2.1;
+                }
+            } else {
+                double base = g->water_y < CANVAS_H - 40 ? g->water_y : NO_WATER;
+                int col = (int)lm_floor((s->x + e->width * 0.5) / TILE_SIZE);
+                if (base == NO_WATER && get_tile(g, col, GRID_ROWS - 2) == T_PIT)
+                    base = (GRID_ROWS - 2) * TILE_SIZE + WATER_LIP;
+                if (base == NO_WATER) { /* high and dry: it waits for the water to come back */
+                    e->telegraph = 0;
+                    e->timer = lm_max(e->timer, FISH_WARNING);
+                    continue;
+                }
+                e->vx = base;
+                e->timer -= step_dt;
+                e->telegraph = e->timer <= FISH_WARNING ? lm_max(0.01, e->timer) : 0;
+                if (e->timer <= 0) {
+                    double rise = lm_max(70, base - e->anchor_y);
+                    e->is_charging = true;
+                    e->telegraph = 0;
+                    e->vy = -lm_sqrt(2 * FISH_GRAVITY * rise);
+                    s->y = base;
+                    spawn_burst(g, s->x + e->width * 0.5, base, 10, lm_biomes[g->cavern.biome].accent_spec, 110);
+                }
+            }
+            break;
+        case EN_SPIDER: /* waits on its thread, twitches, drops, sits, then climbs home */
+            if (e->cooldown > 0)
+                e->cooldown -= step_dt;
+            if (e->is_charging) {
+                s->y += s->speed * step_dt;
+                if (s->y >= s->max_y) {
+                    s->y = s->max_y;
+                    e->is_charging = false;
+                    e->timer = 0.55;
+                }
+            } else if (e->timer > 0) {
+                e->timer -= step_dt;
+            } else if (s->y > e->anchor_y) {
+                s->y = lm_max(e->anchor_y, s->y - 75 * step_dt);
+                if (s->y <= e->anchor_y)
+                    e->cooldown = 1.2;
+            } else if (e->telegraph > 0) {
+                e->telegraph -= step_dt;
+                if (e->telegraph <= 0) {
+                    e->is_charging = true;
+                    lm_audio_spark();
+                }
+            } else if (e->cooldown <= 0 && lm_fabs(pcx - (s->x + e->width * 0.5)) < 48 && pcy > s->y + 10 &&
+                       pcy < s->max_y + 60) {
+                e->telegraph = 0.45;
+            }
+            break;
         case EN_BOUNCER:
             e->timer += step_dt;
             if (!e->is_jumping) {
@@ -1362,6 +1478,10 @@ open_chest(struct lm_game *g, struct lm_collectable const *item)
         prize = CHEST_JACKPOT;
     if (prize == PU_TEA_THERMOS && g->powers[PU_TEA_THERMOS] >= 3)
         prize = CHEST_JACKPOT;
+    if (prize < PU_COUNT && power_is_timed(prize) && g->powers[prize] > 0)
+        prize = CHEST_JACKPOT; /* already carrying one */
+    if (prize == PU_LANTERN_SHIELD && p->has_shield)
+        prize = CHEST_JACKPOT;
     if (prize >= CHEST_LEAD) {
         color = 0xb45cff;
         if (prize == CHEST_LEAD) {
@@ -1397,13 +1517,8 @@ open_chest(struct lm_game *g, struct lm_collectable const *item)
         color = lm_powerups[prize].color;
         if (prize == PU_LANTERN_SHIELD) {
             p->has_shield = true;
-        } else if (prize == PU_TEA_THERMOS) {
-            g->powers[prize] += 1;
         } else {
-            /* one timer's worth, the same as buying it once */
-            double base = power_base_time(SHOP_SPRING_BOOTS + prize);
-            g->power_time[prize] = lm_min(g->power_time[prize] + base, base * 3);
-            g->powers[prize] = (int)lm_ceil(g->power_time[prize] / base);
+            g->powers[prize] += 1; /* flasks pile up; the rest wait for their button */
         }
         snprintf(buf, sizeof(buf), "%s!", lm_powerups[prize].name);
     }
@@ -1481,6 +1596,15 @@ check_collectables(struct lm_game *g, double dt)
                 spawn_burst(g, item->x, item->y, 14, 0x22e4f5, 120);
                 spawn_float(g, item->x, item->y - 10, "+AIR", 0x22e4f5);
                 rumble(g, 0.2, 0.08);
+            } else if (item->kind == COL_PLUG) {
+                if (g->drain_y <= 0)
+                    g->drain_y = g->water_y;
+                g->drain_to = lm_max(g->drain_to, item->powerup * TILE_SIZE + WATER_LIP);
+                g->shake_intensity = 6;
+                lm_audio_tide();
+                spawn_burst(g, item->x, item->y, 18, 0x22e4f5, 150);
+                spawn_float(g, item->x, item->y - 14, "GLUG GLUG GLUG", 0x22e4f5);
+                rumble(g, 0.6, 0.35);
             } else if (item->kind == COL_CHEST) {
                 open_chest(g, item);
             }
@@ -1503,7 +1627,7 @@ check_portal(struct lm_game *g)
         int depth_bonus = g->depth * 100;
         int total = air_bonus + depth_bonus;
         g->score += total;
-        if (g->score > g->high_score)
+        if (g->score > g->high_score && !g->practice)
             g->high_score = g->score;
 
         lm_audio_portal_enter();
@@ -1514,6 +1638,9 @@ check_portal(struct lm_game *g)
         g->adv.relics_in_cavern = g->relics_this_cavern;
         g->adv.total_score = g->score;
         g->adv.air_bonus = total;
+        g->adv.clean = g->hurt_depth != g->depth;
+        g->adv.relic_bonus = 100 + g->depth * 10 + (g->adv.clean ? 100 : 0);
+        g->relic_points += g->adv.relic_bonus;
         g->events |= EV_CAVERN_ADVANCED;
         if (g->depth % WORLD_SIZE == 0 && g->flawless && g->continues < MAX_CONTINUES) {
             g->continues += 1; /* a whole world without losing a life */
@@ -1534,7 +1661,8 @@ check_portal(struct lm_game *g)
             g->pending_advance = 1.25;
             lm_fmt_int(n, sizeof(n), total);
             snprintf(t, sizeof(t), "Cavern %02d Cleared!", g->depth);
-            snprintf(s, sizeof(s), "Air Bonus +%s \xc2\xb7 Entering Cavern %02d \xc2\xb7 Shop in %d", n, g->depth + 1, left);
+            snprintf(s, sizeof(s), "Air Bonus +%s \xc2\xb7 Relic Points +%d%s \xc2\xb7 Shop in %d", n, g->adv.relic_bonus,
+                     g->adv.clean ? " (not a scratch)" : "", left);
             set_banner(g, t, s, 1.25);
         }
     }
@@ -1603,12 +1731,8 @@ lose_life(struct lm_game *g, bool air)
     struct lm_player const *p = &g->player;
     if ((g->events & EV_GAME_OVER) || g->down || g->respawn_timer > 0)
         return;
-    if (g->lives <= 1 && g->phoenix) {
-        g->phoenix = false;
-        g->lives = 4; /* the life being lost now comes off this, leaving the three promised */
-        spawn_float(g, p->x + p->width * 0.5, p->y - 24, "PHOENIX RISES!", 0xff6b3d);
-    }
     g->flawless = false;
+    g->hurt_depth = g->depth;
     if (g->lives <= 1) {
         g->lives = 0;
         if (g->continues > 0) {
@@ -1692,6 +1816,26 @@ update_floats(struct lm_game *g, double dt)
 
 /* --------------------------------------------------------------------- step */
 
+/* The tide runs from the moment the cavern appears, banner and all, so every attempt starts the same way. */
+static void
+update_water(struct lm_game *g, double dt)
+{
+    int was = g->tide_phase;
+    g->tide_clock += dt;
+    double y = lm_tide_at(&g->cavern.tide, g->tide_clock, &g->tide_phase);
+    if (g->drain_to > 0) {
+        g->drain_y = lm_min(g->drain_to, g->drain_y + DRAIN_SPEED * dt);
+        y = lm_max(y, g->drain_y);
+    }
+    g->water_y = y;
+    /* no warning once the plugs are out and there is nothing left to rise */
+    if (g->tide_phase == TIDE_WARN && was != TIDE_WARN && g->drain_to < g->cavern.tide.low_y) {
+        lm_audio_tide();
+        spawn_float(g, CANVAS_W * 0.5, lm_max(60, g->cavern.tide.high_y - 14), "THE WATER STIRS", 0x22e4f5);
+        rumble(g, 0.25, 0.3);
+    }
+}
+
 void
 lm_step(struct lm_game *g, double dt)
 {
@@ -1763,6 +1907,7 @@ lm_step(struct lm_game *g, double dt)
     update_particles(g, dt);
     update_floats(g, dt);
     update_crumbles(g, dt);
+    update_water(g, dt);
     update_movers(g, dt);
 #define STEP_ENDED() ((g->events & EV_GAME_OVER) || g->down || g->respawn_timer > 0)
     update_player(g, dt);
@@ -1796,6 +1941,7 @@ lm_use_continue(struct lm_game *g)
     g->score = g->world_score;
     g->chest_taken = 0;
     g->paid_depth = 0;
+    g->hurt_depth = 0;
     g->respawn_timer = g->pending_advance = 0;
     clear_inputs(g);
     {
@@ -1826,8 +1972,10 @@ lm_save_run(struct lm_game const *g, FILE *f, bool in_shop)
     fprintf(f, "version=1\nseed=%s\ndepth=%d\nin_shop=%d\ndown=%d\n", g->seed, depth, in_shop, g->down);
     fprintf(f, "score=%d\nworld_score=%d\nrelic_points=%d\nlives=%d\nhearts=%d\nmax_hearts=%d\n", g->score, g->world_score,
             g->relic_points, g->lives, g->hearts, g->max_hearts);
-    fprintf(f, "continues=%d\ncontinues_bought=%d\nflawless=%d\nphoenix=%d\nnext_shield=%d\nshield_on=%d\n", g->continues,
-            g->continues_bought, g->flawless, g->phoenix, g->next_shield, g->player.has_shield && g->pending_advance <= 0);
+    fprintf(f, "continues=%d\ncontinues_bought=%d\nflawless=%d\nnext_shield=%d\nshield_on=%d\n", g->continues,
+            g->continues_bought, g->flawless, g->next_shield, g->player.has_shield && g->pending_advance <= 0);
+    /* format 2: powers are carried or not, and a running one is not saved */
+    fprintf(f, "format=3\nhurt_depth=%d\n", g->hurt_depth);
     fprintf(f, "relics=%d\nkeys=%d\nchest_taken=%d\nlives_bought=%d\n", g->total_relics_run, g->total_keys_run, g->chest_taken,
             g->lives_bought);
     fprintf(f, "run_start_high=%d\nrun_start_depth=%d\npaid_depth=%d\npaid=%u\n", g->run_start_high, g->run_start_depth,
@@ -1835,7 +1983,7 @@ lm_save_run(struct lm_game const *g, FILE *f, bool in_shop)
     for (int i = 0; i < PERK_COUNT; i++)
         fprintf(f, "perk%d=%d\n", i, g->perks[i]);
     for (int i = 0; i < PU_COUNT; i++)
-        fprintf(f, "power%d=%d\ntime%d=%d\n", i, g->powers[i], i, (int)(g->power_time[i] * 1000));
+        fprintf(f, "power%d=%d\n", i, g->powers[i]);
 }
 
 bool
@@ -1848,8 +1996,8 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     int start_high = -1, start_depth = -1, paid_depth = 0; /* absent from older saves */
     uint32_t paid = 0;
     static char const *const names[] = {"score", "world_score", "relic_points", "lives", "hearts", "max_hearts", "continues",
-                                        "continues_bought", "flawless", "phoenix", "next_shield", "relics", "keys", "chest_taken",
-                                        "lives_bought"};
+                                        "continues_bought", "flawless", "next_shield", "relics", "keys", "chest_taken",
+                                        "lives_bought", "hurt_depth", "format"};
     while (fgets(line, sizeof(line), f)) {
         char *eq = strchr(line, '=');
         int n, k;
@@ -1890,24 +2038,28 @@ lm_load_run(struct lm_game *g, FILE *f, bool *in_shop)
     g->continues = v[6];
     g->continues_bought = v[7];
     g->flawless = v[8] != 0;
-    g->phoenix = v[9] != 0;
-    g->total_relics_run = v[11];
-    g->total_keys_run = v[12];
-    g->chest_taken = v[13];
-    g->lives_bought = v[14];
-    memcpy(g->perks, perks, sizeof(perks));
+    g->total_relics_run = v[10];
+    g->total_keys_run = v[11];
+    g->chest_taken = v[12];
+    g->lives_bought = v[13];
+    g->hurt_depth = v[14];
+    for (int i = 0; i < PERK_COUNT; i++)
+        g->perks[i] = perks[i] > 0; /* older saves could hold two or three of a thing */
     if (start_high >= 0)
         g->run_start_high = start_high;
     if (start_depth >= 0)
         g->run_start_depth = start_depth;
     g->paid_depth = paid_depth;
     g->paid = paid;
+    if (v[15] < 3 && depth > WORLD_SIZE) /* caverns past the first world have been rebuilt since */
+        g->paid_depth = g->chest_taken = 0, g->paid = 0;
     load_cavern(g, depth);
     /* loading a cavern spends shields, so put them back exactly as saved */
     memcpy(g->powers, powers, sizeof(powers));
     for (int i = 0; i < PU_COUNT; i++)
-        g->power_time[i] = times[i] / 1000.0;
-    g->next_shield = v[10] != 0;
+        if (power_is_timed(i)) /* an older save with time left on the clock gets one to carry */
+            g->powers[i] = powers[i] > 0 || (v[15] < 2 && times[i] > 0);
+    g->next_shield = v[9] != 0;
     g->player.has_shield = shield_on != 0;
     g->player.can_air_jump = g->perks[PERK_FEATHERSTEP] > 0;
     *in_shop = shop != 0;

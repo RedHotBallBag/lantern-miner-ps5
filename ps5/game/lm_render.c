@@ -118,6 +118,30 @@ draw_background(struct wc const *c, struct lm_cavern const *cv, double time)
         ln(c, px + 8, TILE_SIZE + 44, px + 44, TILE_SIZE + 4, 6, RGBA(0x412a1f, 0.52));
     }
 
+    if (cv->biome == BIOME_FLOODED) {
+        /* light from somewhere above, old drain pipes, and a roof that drips */
+        for (int i = 0; i < 4; i++) {
+            double sx = 110 + i * 235 + lm_sin(time * 0.4 + i * 1.9) * 14;
+            tri(c, sx, TILE_SIZE, sx + 26, TILE_SIZE, sx - 74, CANVAS_H - TILE_SIZE, RGBA(0x9fe8ff, 0.028));
+            tri(c, sx + 26, TILE_SIZE, sx - 20, CANVAS_H - TILE_SIZE, sx - 74, CANVAS_H - TILE_SIZE, RGBA(0x9fe8ff, 0.028));
+        }
+        static int const pipe_y[2] = {148, 352};
+        for (int i = 0; i < 2; i++) {
+            double py = pipe_y[i] + (cv->depth * 31 + i * 17) % 40;
+            fr(c, TILE_SIZE, py, CANVAS_W - TILE_SIZE * 2, 12, RGBA(0x14333a, 0.8));
+            fr(c, TILE_SIZE, py + 2, CANVAS_W - TILE_SIZE * 2, 2, RGBA(0x6fb5bd, 0.22));
+            for (int x = 90 + (cv->depth * 53 + i * 120) % 140; x < CANVAS_W - 60; x += 215) {
+                fr(c, x, py - 3, 10, 18, RGBA(0x1d4a52, 0.85));
+                fr(c, x + 2, py - 3, 2, 18, RGBA(0x8fd6d0, 0.18));
+            }
+        }
+        for (int i = 0; i < 7; i++) {
+            double dx = 70 + lm_fmod(i * 149 + cv->depth * 67, CANVAS_W - 140);
+            double k = lm_fmod(time * (0.45 + 0.06 * i) + i * 0.37, 1.0);
+            fr(c, lm_round(dx), TILE_SIZE + k * k * 420, 2, 4 + k * 5, RGBA(0xaee9ff, 0.4 * (1 - k)));
+        }
+    }
+
     for (int i = 0; i < 14; i++) {
         double vx = 55 + lm_fmod(i * 197 + cv->depth * 43, CANVAS_W - 110);
         double vy = 55 + lm_fmod(i * 113 + cv->depth * 29, CANVAS_H - 110);
@@ -243,6 +267,18 @@ draw_tiles(struct wc const *c, struct lm_game const *g, double time, bool slow)
                 ln(c, dx + 8, dy + 1, dx + 13, dy + 7, lw, crack);
                 ln(c, dx + 13, dy + 7, dx + 10, dy + 12, lw, crack);
                 ln(c, dx + 22, dy + 2, dx + 18, dy + 9, lw, crack);
+            } else if (tile == T_PIT && cv->tide.on) {
+                continue; /* the flood is drawn over the top, all in one piece */
+            } else if (tile == T_PIT && cv->biome == BIOME_FLOODED) {
+                for (int k = 0; k < TILE_SIZE; k += 6) {
+                    double sx = x + k, wave = lm_sin(time * 2.6 + sx * 0.045) * 1.8 + lm_sin(time * 1.7 - sx * 0.021) * 1.1;
+                    double top = y + WATER_LIP + wave;
+                    fr(c, sx, top, 6, y + TILE_SIZE - top, RGBA(0x25c4ea, 0.34));
+                    fr(c, sx, top, 6, 2, RGBA(0xd6f8ff, 0.92));
+                    fr(c, sx, top + 2, 6, 3, RGBA(0x4fd8f5, 0.45));
+                }
+                double rise = lm_fmod(time * 9 + col * 11, 18);
+                fr(c, x + 6 + (col * 7) % 17, y + TILE_SIZE - rise, 3, 3, RGBA(0xdff8ff, 0.55 * (1 - rise / 18)));
             } else if (tile == T_PIT) {
                 /* a glowing pool far below, in the cavern's accent colour */
                 double wave = lm_sin(time * 2.6 + col * 0.9) * 2.5;
@@ -295,6 +331,29 @@ draw_movers(struct wc const *c, struct lm_game const *g, double time)
     for (int i = 0; i < g->n_movers; i++) {
         struct lm_mover const *m = &g->movers[i];
         double half = m->width * 0.5;
+        if (m->raft) { /* lashed logs that shudder and bubble as they go under */
+            double shake = m->sink > 0.35 ? lm_sin(time * 44 + i) * 1.6 * m->sink : 0;
+            double x = lm_round(m->x + shake), y = lm_round(m->y + (m->sink > 0 ? 0 : lm_sin(time * 2.4 + i * 1.7) * 1.2));
+            fr(c, x, y, m->width, MOVER_THICKNESS, RGB(0x6b4426));
+            fr(c, x, y, m->width, 3, RGB(0xd29a58));
+            fr(c, x, y + MOVER_THICKNESS - 3, m->width, 3, RGB(0x39230f));
+            for (double k = 14; k < m->width - 6; k += 15)
+                fr(c, x + k, y, 1, MOVER_THICKNESS, RGB(0x2c1a0c));
+            for (int end = 0; end < 2; end++) {
+                double ex = end ? x + m->width - 9 : x + 5;
+                fr(c, ex, y - 1, 4, MOVER_THICKNESS + 2, RGB(0xe8d29a));
+                fr(c, ex + 1, y - 1, 1, MOVER_THICKNESS + 2, RGB(0x8f7a48));
+                disc(c, end ? x + m->width : x, y + 5, 4.5, RGB(0x9a6a3a));
+                disc(c, end ? x + m->width : x, y + 5, 2, RGB(0x5b3a1e));
+            }
+            if (m->sink > 0.35)
+                for (int k = 0; k < 6; k++) {
+                    double rise = lm_fmod(time * 1.8 + k * 0.17, 1.0);
+                    fr(c, lm_round(x + 3 + k * (m->width - 6) / 5.0), lm_round(y + 6 - rise * 16), 3, 3,
+                       RGBA(0xdff8ff, (1 - rise) * m->sink));
+                }
+            continue;
+        }
         /* a faint dotted track shows where it travels */
         if (m->vertical) {
             for (double y = m->min_y; y <= m->max_y + MOVER_THICKNESS; y += 9)
@@ -380,7 +439,19 @@ draw_collectable(struct wc const *c, struct lm_collectable const *it, double tim
     double bob = lm_sin(time * 3.8 + it->phase) * 3.5;
     double x = lm_round(it->x), y = lm_round(it->y + bob);
 
-    if (it->kind == COL_KEY) {
+    if (it->kind == COL_PLUG) { /* a great red bung on a chain, begging to be pulled */
+        double py = lm_round(it->base_y), tug = lm_sin(time * 3) * 1.2;
+        for (int k = 0; k < 5; k++)
+            ring(c, x + (k % 2 ? 1 : -1), py - 12 - k * 5 + tug * (4 - k) * 0.2, 3, 1.4, RGB(0xc9b37a));
+        ring(c, x, py - 8 + tug, 5, 2.5, RGB(0xffe347));
+        poly(c, (double const[]){x - 11, py - 5, x + 11, py - 5, x + 8, py + 9, x - 8, py + 9}, 4, RGB(0xd23a4e));
+        fr(c, x - 11, py - 5, 22, 3, RGB(0xff7a8c));
+        fr(c, x - 8, py + 7, 16, 2, RGB(0x7c1c2c));
+        fr(c, x - 6, py - 1, 3, 6, RGBA(0xffffff, 0.45));
+        double blink = lm_sin(time * 5);
+        if (blink > 0.4)
+            fr(c, x + 11, py - 16, 3, 3, RGB(0xffffff));
+    } else if (it->kind == COL_KEY) {
         bool flash = lm_sin(time * 8 + it->phase) > 0;
         uint32_t primary = flash ? RGB(0xf43fa5) : RGB(0xffe347);
         uint32_t rim = flash ? RGB(0xffd1ec) : RGB(0xfff8c4);
@@ -543,6 +614,55 @@ draw_enemy(struct wc const *c, struct lm_enemy const *e, double time, bool slow)
         fr(c, x + 1, y, w - 2, 3, RGB(0xf5a623));
         fr(c, x + 1, y + h - 3, w - 2, 3, RGB(0xf5a623));
         break;
+    case EN_FISH: {
+        double cx = x + w / 2;
+        if (!e->is_charging) {
+            if (tele) { /* rings and bubbles where it is about to come up */
+                double base = lm_round(e->vx);
+                for (int k = 0; k < 3; k++) {
+                    double grow = lm_fmod(time * 2.2 + k / 3.0, 1.0);
+                    fr(c, cx - 5 - grow * 14, base - 1, 6, 2, RGBA(0xffffff, 1 - grow));
+                    fr(c, cx - 1 + grow * 14, base - 1, 6, 2, RGBA(0xffffff, 1 - grow));
+                    fr(c, lm_round(cx - 8 + k * 7), base - 3 - grow * 14, 3, 3, RGBA(0xdff8ff, 1 - grow));
+                }
+                fr(c, cx - 1, base - 26, 3, 8, RGB(0xffe347));
+                fr(c, cx - 1, base - 15, 3, 3, RGB(0xffe347));
+            }
+            break;
+        }
+        double cy = y + h / 2, d = e->vy < 0 ? -1 : 1; /* d points the way the nose goes */
+        double flick = lm_sin(time * 26 + phase) * 3;
+        tri(c, cx, cy - d * 7, cx - 9 + flick, cy - d * 18, cx + 9 + flick, cy - d * 18, RGB(0xff7b54));
+        tri(c, cx - 7, cy - d * 2, cx - 15, cy - d * 8, cx - 5, cy + d * 4, RGB(0xe2562f));
+        tri(c, cx + 7, cy - d * 2, cx + 15, cy - d * 8, cx + 5, cy + d * 4, RGB(0xe2562f));
+        disc(c, cx, cy - d * 3, 8, RGB(0xff9f43));
+        disc(c, cx, cy + d * 3, 9, RGB(0xff9f43));
+        disc(c, cx, cy + d * 1, 5, RGB(0xffd08a));
+        fr(c, lm_round(cx - 7), lm_round(cy + d * 3 - 2), 5, 5, RGB(0xffffff));
+        fr(c, lm_round(cx + 2), lm_round(cy + d * 3 - 2), 5, 5, RGB(0xffffff));
+        fr(c, lm_round(cx - 5), lm_round(cy + d * 3 - 1 + d), 2, 2, RGB(0x1b1010));
+        fr(c, lm_round(cx + 3), lm_round(cy + d * 3 - 1 + d), 2, 2, RGB(0x1b1010));
+        for (int k = -1; k <= 1; k++) /* teeth */
+            tri(c, cx + k * 5 - 2, cy + d * 9, cx + k * 5 + 2, cy + d * 9, cx + k * 5, cy + d * 14, RGB(0xffffff));
+        break;
+    }
+    case EN_SPIDER: {
+        double cx = x + w / 2 + (tele ? lm_round(lm_sin(time * 55) * 2) : 0), cy = y + h / 2;
+        ln(c, x + w / 2, lm_round(e->s.min_y), cx, cy - 6, 1.2, RGBA(0xe6dccb, 0.7));
+        double kick = tele || e->is_charging ? lm_sin(time * 30) * 2 : lm_sin(time * 4 + phase);
+        for (int i = 0; i < 4; i++) {
+            double ky = cy - 6 + i * 4, bend = i % 2 ? kick : -kick;
+            for (int side = -1; side <= 1; side += 2) {
+                ln(c, cx + side * 4, cy - 1 + i, cx + side * 11, ky + bend, 1.6, RGB(0xff9f43));
+                ln(c, cx + side * 11, ky + bend, cx + side * 13, ky + 5 + bend, 1.6, RGB(0xff9f43));
+            }
+        }
+        disc(c, cx, cy - 2, 7, RGB(0x8c2f39));
+        disc(c, cx, cy + 5, 5, tele ? RGB(0xffe347) : RGB(0xc2453f));
+        fr(c, lm_round(cx - 4), lm_round(cy + 4), 3, 3, RGB(0xfff6d1));
+        fr(c, lm_round(cx + 1), lm_round(cy + 4), 3, 3, RGB(0xfff6d1));
+        break;
+    }
     default: {
         double pulse = 1 + 0.16 * lm_sin(time * 7 + phase);
         double cx = x + w / 2, cy = y + h / 2;
@@ -567,15 +687,24 @@ pr(struct ptr const *t, double lx, double ly, double w, double h, uint32_t col)
     fr(t->c, x, y, lm_fabs(x1 - x0), lm_fabs(y1 - y0), col);
 }
 
+/* A running power blinks through its last few seconds. */
+static bool
+showing(double left, double time)
+{
+    return left > 0 && (left > POWER_WARNING || (long)lm_floor(time * 8) % 2 == 0);
+}
+
+/* What the miner is under the influence of, drawn on and around them, with the time left underneath. */
 static void
 draw_player(struct wc const *c, struct lm_player const *p, double time, uint32_t lantern)
 {
     if (p->invuln > 0 && (long)lm_floor(p->invuln * 14) % 2 == 0)
         return;
 
-    uint32_t scarf = RGB(0xe04f70);
+    bool spring = showing(p->spring, time), magnet = showing(p->magnet, time), slow = showing(p->slow, time);
+    uint32_t scarf = slow ? RGB(0x22e4f5) : RGB(0xe04f70);
     for (int i = 1; i < 4; i++)
-        ln(c, p->scarf[i - 1].x, p->scarf[i - 1].y, p->scarf[i].x, p->scarf[i].y, 4, scarf);
+        ln(c, p->scarf[i - 1].x, p->scarf[i - 1].y, p->scarf[i].x, p->scarf[i].y, slow ? 5 : 4, scarf);
 
     double cx = p->x + p->width * 0.5, by = p->y + p->height;
     struct ptr t = {c, lm_round(cx), lm_round(by), p->facing * p->squash_x, p->squash_y};
@@ -586,15 +715,23 @@ draw_player(struct wc const *c, struct lm_player const *p, double time, uint32_t
         disc(c, t.ox, t.oy - 13 * t.sy, aura * avg, RGBA(0xf5a623, 0.14));
         ring(c, t.ox, t.oy - 13 * t.sy, aura * avg, 2, RGB(0xf5a623));
     }
+    if (magnet)
+        for (int i = 0; i < 2; i++) { /* rings drawing inwards */
+            double k = time * 1.6 + i * 0.5;
+            k -= lm_floor(k);
+            ring(c, t.ox, t.oy - 13, 34 - 24 * k, 1.5, RGBA(0xffe347, 0.25 + 0.6 * k));
+        }
+    if (spring)
+        disc(c, t.ox, t.oy - 3, 13, RGBA(0x2ce87d, 0.28));
 
     double stride = (p->grounded && lm_fabs(p->vx) > 15) || p->climbing ? lm_sin(p->walk_phase * 12) * 3.5 : 0;
-    uint32_t boots = p->spring > 0 ? RGB(0x2ce87d) : RGB(0x4a3225);
+    uint32_t boots = RGB(0x4a3225);
     pr(&t, lm_round(-7 + stride), -5, 6, 5, boots);
     pr(&t, lm_round(1 - stride), -5, 6, 5, boots);
     pr(&t, -7, -15, 14, 10, RGB(0x3c6e8f));
     pr(&t, -5, -14, 10, 6, RGB(0xd98a4e));
     pr(&t, 1, -12, 2, 2, RGB(0xffe347));
-    pr(&t, -7, -16, 14, 3, RGB(0xe04f70));
+    pr(&t, -7, -16, 14, 3, scarf);
     pr(&t, -5, -22, 11, 6, RGB(0xf5cba7));
     pr(&t, -4, -18, 9, 3, RGB(0x8b5a3c));
     pr(&t, 2, -21, 2, 2, RGB(0x1b1722));
@@ -602,6 +739,110 @@ draw_player(struct wc const *c, struct lm_player const *p, double time, uint32_t
     pr(&t, -5, -27, 10, 2, RGB(0xf5d076));
     pr(&t, 5, -25, 3, 3, RGB(0xfff9df));
     pr(&t, 6, -24, 2, 2, lantern);
+
+    if (showing(p->lead, time)) { /* great iron clogs */
+        for (int i = 0; i < 2; i++) {
+            double bx = lm_round(i ? 1 - stride : -10 + stride);
+            pr(&t, bx, -7, 9, 7, RGB(0x8d93a3));
+            pr(&t, bx, -2, 9, 2, RGB(0x3a3e4a));
+            pr(&t, bx + 3, -6, 2, 2, RGB(0xe8ecf5));
+        }
+    } else if (spring) { /* big green boots, shedding sparks */
+        pr(&t, lm_round(-9 + stride), -7, 8, 7, RGB(0x2ce87d));
+        pr(&t, lm_round(1 - stride), -7, 8, 7, RGB(0x2ce87d));
+        for (int i = 0; i < 4; i++) {
+            double k = time * 2.2 + i * 0.25;
+            k -= lm_floor(k);
+            fr(c, lm_round(t.ox - 13 + i * 8), lm_round(t.oy - 2 - k * 14), 2, 2, RGBA(0xa8ffcb, 1 - k));
+        }
+    }
+    if (slow) { /* a little clock over the head */
+        double ky = t.oy - 39;
+        disc(c, t.ox, ky, 7, RGB(0x0c2a33));
+        ring(c, t.ox, ky, 7, 1.5, RGB(0x22e4f5));
+        ln(c, t.ox, ky, t.ox, ky - 5, 1.2, RGB(0xe8fdff));
+        ln(c, t.ox, ky, t.ox + lm_cos(time * 3) * 4, ky + lm_sin(time * 3) * 4, 1.2, RGB(0xe8fdff));
+    }
+    if (showing(p->muddle, time)) /* stars going round */
+        for (int i = 0; i < 3; i++) {
+            double a = time * 6 + i * 2.094;
+            double sx = lm_round(t.ox + lm_cos(a) * 12), sy = lm_round(t.oy - 31 + lm_sin(a) * 4);
+            fr(c, sx - 1, sy - 3, 2, 6, RGB(0xd08cff));
+            fr(c, sx - 3, sy - 1, 6, 2, RGB(0xd08cff));
+        }
+
+    /* time bars over the head: under the feet they hide behind the room name on the bottom floor */
+    struct { double left, full; uint32_t col; } const bars[5] = {
+        {p->spring, lm_powerups[PU_SPRING_BOOTS].duration, 0x2ce87d},
+        {p->magnet, lm_powerups[PU_STARLIGHT_MAGNET].duration, 0xffe347},
+        {p->slow, lm_powerups[PU_CLOCKWORK_SLOW].duration, 0x22e4f5},
+        {p->lead, LEAD_TIME, 0xb45cff},
+        {p->muddle, MUDDLE_TIME, 0xb45cff}};
+    double y = lm_round(by) - 54;
+    for (int i = 0; i < 5; i++) {
+        if (bars[i].left <= 0)
+            continue;
+        fr(c, t.ox - 13, y, 26, 4, RGBA(0x0a080d, 0.85));
+        if (showing(bars[i].left, time))
+            fr(c, t.ox - 12, y + 1, lm_max(1, 24 * lm_min(1, bars[i].left / bars[i].full)), 2, RGB(bars[i].col));
+        y -= 4;
+    }
+}
+
+/* ------------------------------------------------------------------- water */
+
+static void
+draw_water(struct wc const *c, struct lm_game const *g, double time)
+{
+    struct lm_tide const *t = &g->cavern.tide;
+    if (!t->on)
+        return;
+    double floor = CANVAS_H - TILE_SIZE, y = g->water_y;
+    double x0 = TILE_SIZE, span = CANVAS_W - TILE_SIZE * 2;
+    bool warn = g->tide_phase == TIDE_WARN && g->drain_to < t->low_y;
+    bool will_rise = t->high_y < t->low_y && g->drain_to < t->low_y;
+
+    /* the high-water mark, so there are no surprises; it flashes when the water is about to move */
+    if (will_rise && g->tide_phase != TIDE_HIGH) {
+        double mark = lm_max(t->high_y, g->drain_to);
+        double a = warn ? 0.55 + 0.45 * lm_sin(time * 14) : 0.22;
+        if (mark < y - 4)
+            for (double x = x0 + 4; x < x0 + span - 8; x += 18)
+                fr(c, x, mark - 1, 9, 2, RGBA(warn ? 0xffffff : 0x8fe6ff, a));
+        if (warn)
+            for (int k = 0; k < 8; k++) {
+                double ax = 70 + k * 117, lift = lm_fmod(time * 26 + k * 7, 18);
+                tri(c, ax - 6, y - 8 - lift, ax + 6, y - 8 - lift, ax, y - 18 - lift, RGBA(0x8fe6ff, 0.8 - lift / 24));
+            }
+    }
+    if (y >= floor)
+        return;
+
+    float sx = c->ox + (float)x0 * c->s, sw = (float)span * c->s;
+    vkr_rect_grad(c->r, sx, c->oy + (float)(y + 3) * c->s, sw, (float)(floor - y - 3) * c->s, RGBA(0x25c4ea, 0.30),
+                  RGBA(0x0a3b66, 0.62));
+    double swell = warn ? 3.4 : 1.8;
+    for (double x = x0; x < x0 + span; x += 6) {
+        double wave = lm_sin(time * (warn ? 7 : 2.6) + x * 0.045) * swell + lm_sin(time * 1.7 - x * 0.021) * swell * 0.6;
+        double top = y + wave, w = lm_min(6, x0 + span - x);
+        fr(c, x, top, w, 3 - wave > 0 ? 3 - wave : 0, RGBA(0x25c4ea, 0.30));
+        fr(c, x, top, w, 2, RGBA(0xd6f8ff, 0.92));
+        fr(c, x, top + 2, w, 3, RGBA(0x4fd8f5, 0.45));
+    }
+    /* wavering light under the surface */
+    for (int i = 0; i < 18; i++) {
+        double cx = x0 + lm_fmod(i * 131 + time * (7 + i % 4), span - 30);
+        double cy = y + 12 + (i * 47) % 150;
+        if (cy < floor - 4)
+            fr(c, cx + lm_sin(time * 1.9 + i) * 8, cy, 14 + (i % 3) * 8, 2, RGBA(0xbff2ff, 0.10 + 0.06 * lm_sin(time * 2.3 + i)));
+    }
+    int bubbles = warn || g->tide_phase == TIDE_RISING ? 44 : 20;
+    for (int i = 0; i < bubbles; i++) {
+        double depth = floor - y;
+        double k = lm_fmod(time * (14 + i % 7 * 4) + i * 53, lm_max(8, depth));
+        double bx = x0 + 6 + (i * 89) % (int)(span - 12) + lm_sin(time * 3 + i) * 3;
+        fr(c, lm_round(bx), lm_round(floor - k), 2 + i % 2, 2 + i % 2, RGBA(0xdff8ff, 0.5));
+    }
 }
 
 /* ---------------------------------------------------------------- lighting */
@@ -648,6 +889,7 @@ draw_lighting(struct wc const *c, struct lm_game const *g, bool bloom)
         double rad = it->kind == COL_KEY ? 28 : 34;
         uint32_t col = it->kind == COL_KEY   ? RGBA(0xf43fa5, 0.18 * k)
                        : it->kind == COL_AIR ? RGBA(0x22e4f5, 0.18 * k)
+                       : it->kind == COL_PLUG ? RGBA(0xff4f6a, 0.24 * k)
                                              : RGBA(0xffe347, 0.16 * k);
         glow(c, it->x, it->y, rad, col, 0.5);
     }
@@ -706,6 +948,46 @@ lm_draw_icon(struct vkr *r, int icon, float x, float y, float scale, double time
         e.s.x = -e.width / 2;
         e.s.y = -e.height / 2;
         draw_enemy(&c, &e, time, false);
+    } else if (icon == ICON_FISH) {
+        struct lm_enemy e = {0};
+        e.s.kind = EN_FISH;
+        e.width = e.height = 22;
+        e.s.x = -11;
+        e.s.y = -9;
+        e.vy = -1;
+        e.is_charging = true;
+        draw_enemy(&c, &e, time, false);
+    } else if (icon == ICON_PLUG) {
+        struct lm_collectable it = {0};
+        it.kind = COL_PLUG;
+        it.base_y = 6;
+        draw_collectable(&c, &it, time);
+    } else if (icon == ICON_RAFT) {
+        struct lm_mover *m = &g.movers[0];
+        memset(m, 0, sizeof(*m));
+        m->raft = true;
+        m->width = 34;
+        m->x = -17;
+        m->y = -4;
+        g.n_movers = 1;
+        draw_movers(&c, &g, time);
+        for (int i = 0; i < 8; i++)
+            fr(&c, -22 + i * 6, 8 + lm_sin(time * 3 + i) * 1.5, 6, 2, RGB(0x25c4ea));
+    } else if (icon == ICON_TIDE) {
+        double lift = lm_sin(time * 1.6) * 7;
+        fr(&c, -20, 2 - lift, 40, 18 + lift, RGBA(0x25c4ea, 0.45));
+        fr(&c, -20, 2 - lift, 40, 2, RGB(0xd6f8ff));
+        for (int x = -20; x < 20; x += 9)
+            fr(&c, x, -13, 5, 2, RGB(0x8fe6ff));
+        tri(&c, -5, -2 - lift, 5, -2 - lift, 0, -10 - lift, RGB(0xffffff));
+    } else if (icon == ICON_SPIDER) {
+        struct lm_enemy e = {0};
+        e.s.kind = EN_SPIDER;
+        e.width = e.height = 22;
+        e.s.x = -11;
+        e.s.y = -8;
+        e.s.min_y = -20;
+        draw_enemy(&c, &e, time, false);
     } else if (icon == ICON_SPARK) {
         double pulse = 1 + 0.2 * lm_sin(time * 18);
         disc(&c, 0, 0, 11 * pulse, RGBA(0xf43fa5, 0.32));
@@ -748,7 +1030,7 @@ lm_draw_world(struct vkr *r, struct lm_game const *g, struct lm_world_opts const
 {
     struct lm_cavern const *cv = &g->cavern;
     double time = g->elapsed;
-    bool slow = g->powers[PU_CLOCKWORK_SLOW] > 0 || g->player.slow > 0;
+    bool slow = g->player.slow > 0;
     struct wc c = {r, o->ox, o->oy, o->scale};
     if (g->shake_enabled) {
         c.ox += (float)lm_round(g->shake_x) * o->scale;
@@ -794,6 +1076,7 @@ lm_draw_world(struct vkr *r, struct lm_game const *g, struct lm_world_opts const
     }
 
     draw_player(&c, &g->player, time, RGB(b->lantern_glow));
+    draw_water(&c, g, time);
 
     for (int i = 0; i < LM_MOTES; i++) {
         struct lm_mote const *m = &g->motes[i];
